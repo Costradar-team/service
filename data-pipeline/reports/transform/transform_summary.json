@@ -1,0 +1,201 @@
+{
+  "input_row_count": 3062819,
+  "processed_row_count": 204036,
+  "excluded_mapping_include_x_row_count": 29419,
+  "unmapped_row_count": 2829364,
+  "rejected_row_count": 0,
+  "canonical_item_row_counts": {
+    "계란": 3562,
+    "밀가루": 43985,
+    "버터": 21890,
+    "설탕": 57805,
+    "우유": 76794
+  },
+  "duplicate_check": {
+    "key_columns": [
+      "상품명",
+      "판매업소",
+      "조사일"
+    ],
+    "duplicate_key_count": 0,
+    "duplicate_row_count": 0,
+    "examples": {}
+  },
+  "source_files": [
+    {
+      "file": "data\\raw\\한국소비자원_생필품 가격 정보_20250718.csv",
+      "encoding": "cp949",
+      "columns": [
+        "상품명",
+        "조사일",
+        "판매가격",
+        "판매업소",
+        "제조사",
+        "세일여부",
+        "원플러스원"
+      ]
+    },
+    {
+      "file": "data\\raw\\한국소비자원_생필품 가격 정보_20250822.csv",
+      "encoding": "cp949",
+      "columns": [
+        "상품명",
+        "조사일",
+        "판매가격",
+        "판매업소",
+        "제조사",
+        "세일여부",
+        "원플러스원"
+      ]
+    },
+    {
+      "file": "data\\raw\\한국소비자원_생필품 가격 정보_20250919.CSV",
+      "encoding": "cp949",
+      "columns": [
+        "상품명",
+        "조사일",
+        "판매가격",
+        "판매업소",
+        "제조사",
+        "세일여부",
+        "원플러스원"
+      ]
+    },
+    {
+      "file": "data\\raw\\한국소비자원_생필품 가격 정보_20251024.csv",
+      "encoding": "cp949",
+      "columns": [
+        "상품명",
+        "조사일",
+        "판매가격",
+        "판매업소",
+        "제조사",
+        "세일여부",
+        "원플러스원"
+      ]
+    },
+    {
+      "file": "data\\raw\\한국소비자원_생필품 가격 정보_20251121.CSV",
+      "encoding": "cp949",
+      "columns": [
+        "상품명",
+        "조사일",
+        "판매가격",
+        "판매업소",
+        "제조사",
+        "세일여부",
+        "원플러스원"
+      ]
+    },
+    {
+      "file": "data\\raw\\한국소비자원_생필품 가격 정보_20251219.CSV",
+      "encoding": "cp949",
+      "columns": [
+        "상품명",
+        "조사일",
+        "판매가격",
+        "판매업소",
+        "제조사",
+        "세일여부",
+        "원플러스원"
+      ]
+    },
+    {
+      "file": "data\\raw\\한국소비자원_생필품 가격 정보_20260130.CSV",
+      "encoding": "cp949",
+      "columns": [
+        "상품명",
+        "조사일",
+        "판매가격",
+        "판매업소",
+        "제조사",
+        "세일여부",
+        "원플러스원"
+      ]
+    },
+    {
+      "file": "data\\raw\\한국소비자원_생필품 가격 정보_20260227.csv",
+      "encoding": "cp949",
+      "columns": [
+        "상품명",
+        "조사일",
+        "판매가격",
+        "판매업소",
+        "제조사",
+        "세일여부",
+        "원플러스원"
+      ]
+    },
+    {
+      "file": "data\\raw\\한국소비자원_생필품 가격 정보_20260327.csv",
+      "encoding": "cp949",
+      "columns": [
+        "상품명",
+        "조사일",
+        "판매가격",
+        "판매업소",
+        "제조사",
+        "세일여부",
+        "원플러스원"
+      ]
+    },
+    {
+      "file": "data\\raw\\한국소비자원_생필품 가격 정보_20260424.csv",
+      "encoding": "cp949",
+      "columns": [
+        "상품명",
+        "조사일",
+        "판매가격",
+        "판매업소",
+        "제조사",
+        "세일여부",
+        "원플러스원"
+      ]
+    },
+    {
+      "file": "data\\raw\\한국소비자원_생필품 가격 정보_20260522.csv",
+      "encoding": "cp949",
+      "columns": [
+        "상품명",
+        "조사일",
+        "판매가격",
+        "판매업소",
+        "제조사",
+        "세일여부",
+        "원플러스원"
+      ]
+    },
+    {
+      "file": "data\\raw\\한국소비자원_생필품 가격 정보_20260626.csv",
+      "encoding": "cp949",
+      "columns": [
+        "상품명",
+        "조사일",
+        "판매가격",
+        "판매업소",
+        "제조사",
+        "세일여부",
+        "원플러스원"
+      ]
+    },
+    {
+      "file": "data\\raw\\한국소비자원_생필품 가격 정보_20260724.csv",
+      "encoding": "cp949",
+      "columns": [
+        "상품명",
+        "조사일",
+        "판매가격",
+        "판매업소",
+        "제조사",
+        "세일여부",
+        "원플러스원"
+      ]
+    }
+  ],
+  "outputs": {
+    "processed": "data\\processed\\kca_prices_processed.csv",
+    "unmapped_products": "reports\\transform\\unmapped_products.csv",
+    "rejected_rows": "reports\\transform\\rejected_rows.csv",
+    "summary": "reports\\transform\\transform_summary.json"
+  }
+}

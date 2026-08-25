@@ -1,0 +1,98 @@
+{
+  "dataset": "kca_daily_necessities_price",
+  "source_sample": "data/raw/한국소비자원_생필품 가격 정보_20260724.csv",
+  "encoding_candidates": [
+    "utf-8-sig",
+    "cp949"
+  ],
+  "required_columns": [
+    "상품명",
+    "조사일",
+    "판매가격",
+    "판매업소",
+    "제조사",
+    "세일여부",
+    "원플러스원"
+  ],
+  "null_values": [
+    ""
+  ],
+  "date_columns": {
+    "조사일": {
+      "format": "%Y-%m-%d"
+    }
+  },
+  "numeric_columns": {
+    "판매가격": {
+      "type": "integer",
+      "allow_thousands_separator": true
+    }
+  },
+  "unique_keys": [
+    {
+      "name": "product_store_survey_date",
+      "columns": [
+        "상품명",
+        "판매업소",
+        "조사일"
+      ]
+    }
+  ],
+  "item_profiles": [
+    {
+      "name": "product_coverage",
+      "item_column": "상품명",
+      "sku_column": "상품명",
+      "store_column": "판매업소"
+    }
+  ],
+  "keyword_candidate_profiles": [
+    {
+      "name": "core_ingredient_product_candidates",
+      "column": "상품명",
+      "keywords": [
+        "밀가루",
+        "설탕",
+        "버터",
+        "계란",
+        "우유"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "required_columns_present",
+      "description": "원천 CSV에 필수 컬럼이 모두 존재해야 한다."
+    },
+    {
+      "id": "column_null_profile",
+      "description": "컬럼별 NULL/결측 개수와 결측률을 반복 확인한다.",
+      "mode": "profile_only"
+    },
+    {
+      "id": "date_parse_profile",
+      "description": "조사일 파싱 가능 여부와 최소/최대 조사일 기간을 반복 확인한다.",
+      "mode": "profile_only"
+    },
+    {
+      "id": "numeric_value_profile",
+      "description": "판매가격의 NULL, 0, 음수, 숫자 변환 실패 여부를 반복 확인한다.",
+      "mode": "profile_only"
+    },
+    {
+      "id": "duplicate_key_profile",
+      "description": "상품명 + 판매업소 + 조사일 조합의 중복 여부를 반복 확인한다.",
+      "mode": "profile_only"
+    },
+    {
+      "id": "item_coverage_profile",
+      "description": "품목별 행 수, SKU 수, 판매점 수를 반복 확인한다.",
+      "mode": "profile_only"
+    },
+    {
+      "id": "keyword_candidate_profile",
+      "description": "밀가루/설탕/버터/계란/우유 키워드로 잡히는 상품명 후보를 반복 확인한다.",
+      "mode": "profile_only"
+    }
+  ]
+}
