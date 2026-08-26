@@ -36,6 +36,10 @@ Table price_observation {
   price int [not null]
   is_sale boolean
   is_one_plus_one boolean
+
+  indexes {
+    (product_id, store_id, survey_date) [unique]
+  }
 }
 
 Ref: item_subtype.canonical_item_id > canonical_item.canonical_item_id

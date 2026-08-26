@@ -19,6 +19,7 @@ DEFAULT_REPORT_DIR = ROOT / "reports" / "transform"
 PROCESSED_FILENAME = "kca_prices_processed.csv"
 UNMAPPED_FILENAME = "unmapped_products.csv"
 REJECTED_FILENAME = "rejected_rows.csv"
+CONFLICTING_ROWS_FILENAME = "conflicting_rows.csv"
 SUMMARY_FILENAME = "transform_summary.json"
 CANONICAL_ITEMS = {"밀가루", "설탕", "버터", "계란", "우유"}
 MAPPING_COLUMNS = [
@@ -29,10 +30,18 @@ MAPPING_COLUMNS = [
     "mapping_include",
 ]
 ADDED_COLUMNS = ["canonical_item", "subtype", "spec"]
+DUPLICATE_GRAIN_COLUMNS = ["상품명", "판매업소", "조사일"]
 REJECT_METADATA_COLUMNS = [
     "source_file",
     "source_row_number",
     "reject_reason",
+    "original_조사일",
+    "original_판매가격",
+]
+CONFLICTING_ROW_METADATA_COLUMNS = [
+    "source_file",
+    "source_row_number",
+    "conflict_reason",
     "original_조사일",
     "original_판매가격",
 ]
@@ -43,6 +52,17 @@ class SourceFile:
     path: Path
     encoding: str
     columns: list[str]
+
+
+@dataclass(frozen=True)
+class TransformRow:
+    row: dict[str, str]
+    source_file: str
+    source_row_number: int
+    original_survey_date: str
+    original_price: str
+    grain_key: tuple[str, ...]
+    row_signature: tuple[str, ...]
 
 
 def load_rules(path: Path) -> dict[str, Any]:
@@ -115,6 +135,10 @@ def parse_integer(value: str, allow_thousands_separator: bool) -> int:
 
 
 def make_key(row: dict[str, str], columns: list[str]) -> tuple[str, ...]:
+    return tuple((row.get(column) or "").strip() for column in columns)
+
+
+def make_row_signature(row: dict[str, str], columns: list[str]) -> tuple[str, ...]:
     return tuple((row.get(column) or "").strip() for column in columns)
 
 
@@ -220,24 +244,30 @@ def transform(
         "allow_thousands_separator",
         False,
     )
-    unique_key_columns = rules["unique_keys"][0]["columns"]
     output_columns = build_output_columns(sources)
     rejected_columns = REJECT_METADATA_COLUMNS + output_columns
+    conflicting_row_columns = CONFLICTING_ROW_METADATA_COLUMNS + output_columns
 
     output_dir.mkdir(parents=True, exist_ok=True)
     report_dir.mkdir(parents=True, exist_ok=True)
     processed_path = output_dir / PROCESSED_FILENAME
     rejected_path = report_dir / REJECTED_FILENAME
     unmapped_path = report_dir / UNMAPPED_FILENAME
+    conflicting_rows_path = report_dir / CONFLICTING_ROWS_FILENAME
     summary_path = report_dir / SUMMARY_FILENAME
 
     input_row_count = 0
     processed_row_count = 0
     excluded_by_mapping_count = 0
     rejected_row_count = 0
+    identical_duplicate_key_count = 0
+    identical_duplicate_row_count = 0
+    conflict_key_count = 0
+    conflict_row_count = 0
     unmapped_product_counts: Counter[str] = Counter()
     canonical_item_counts: Counter[str] = Counter()
     duplicate_key_counts: Counter[tuple[str, ...]] = Counter()
+    rows_by_grain: dict[tuple[str, ...], list[TransformRow]] = {}
 
     with processed_path.open(
         "w",
@@ -247,7 +277,11 @@ def transform(
         "w",
         encoding="utf-8-sig",
         newline="",
-    ) as rejected_file:
+    ) as rejected_file, conflicting_rows_path.open(
+        "w",
+        encoding="utf-8-sig",
+        newline="",
+    ) as conflicting_rows_file:
         processed_writer = csv.DictWriter(
             processed_file,
             fieldnames=output_columns,
@@ -258,8 +292,14 @@ def transform(
             fieldnames=rejected_columns,
             extrasaction="ignore",
         )
+        conflicting_rows_writer = csv.DictWriter(
+            conflicting_rows_file,
+            fieldnames=conflicting_row_columns,
+            extrasaction="ignore",
+        )
         processed_writer.writeheader()
         rejected_writer.writeheader()
+        conflicting_rows_writer.writeheader()
 
         for source in sources:
             with source.path.open("r", encoding=source.encoding, newline="") as input_file:
@@ -286,7 +326,6 @@ def transform(
 
                     row["조사일"] = parse_date(row["조사일"], date_format)
                     row["판매가격"] = str(parse_integer(row["판매가격"], allow_thousands_separator))
-                    duplicate_key_counts[make_key(row, unique_key_columns)] += 1
 
                     product = row.get("상품명", "")
                     mapping_row = item_mapping.get(product)
@@ -300,11 +339,67 @@ def transform(
                     row["canonical_item"] = mapping_row["canonical_item"]
                     row["subtype"] = mapping_row["subtype"]
                     row["spec"] = mapping_row["spec"]
-                    processed_writer.writerow(
-                        {column: row.get(column, "") for column in output_columns}
+
+                    grain_key = make_key(row, DUPLICATE_GRAIN_COLUMNS)
+                    duplicate_key_counts[grain_key] += 1
+                    rows_by_grain.setdefault(grain_key, []).append(
+                        TransformRow(
+                            row=row,
+                            source_file=path_for_report(source.path),
+                            source_row_number=source_row_number,
+                            original_survey_date=original_survey_date,
+                            original_price=original_price,
+                            grain_key=grain_key,
+                            row_signature=make_row_signature(row, output_columns),
+                        )
                     )
-                    processed_row_count += 1
-                    canonical_item_counts[row["canonical_item"]] += 1
+
+        for grain_rows in rows_by_grain.values():
+            row_signatures = {row.row_signature for row in grain_rows}
+            if len(row_signatures) > 1:
+                conflict_key_count += 1
+                conflict_row_count += len(grain_rows)
+                for grain_row in grain_rows:
+                    conflicting_rows_writer.writerow(
+                        {
+                            **{
+                                column: grain_row.row.get(column, "")
+                                for column in output_columns
+                            },
+                            "source_file": grain_row.source_file,
+                            "source_row_number": grain_row.source_row_number,
+                            "conflict_reason": "duplicate_grain_conflict",
+                            "original_조사일": grain_row.original_survey_date,
+                            "original_판매가격": grain_row.original_price,
+                        }
+                    )
+                continue
+
+            selected_row = grain_rows[0]
+            processed_writer.writerow(
+                {column: selected_row.row.get(column, "") for column in output_columns}
+            )
+            processed_row_count += 1
+            canonical_item_counts[selected_row.row["canonical_item"]] += 1
+
+            if len(grain_rows) > 1:
+                identical_duplicate_key_count += 1
+                identical_duplicate_row_count += len(grain_rows) - 1
+                for duplicate_row in grain_rows[1:]:
+                    rejected_row_count += 1
+                    rejected_writer.writerow(
+                        {
+                            **{
+                                column: duplicate_row.row.get(column, "")
+                                for column in output_columns
+                            },
+                            "source_file": duplicate_row.source_file,
+                            "source_row_number": duplicate_row.source_row_number,
+                            "reject_reason": "duplicate_identical",
+                            "original_조사일": duplicate_row.original_survey_date,
+                            "original_판매가격": duplicate_row.original_price,
+                        }
+                    )
 
     unmapped_rows = [
         {"상품명": product, "row_count": count}
@@ -331,9 +426,13 @@ def transform(
             for item in sorted(CANONICAL_ITEMS)
         },
         "duplicate_check": {
-            "key_columns": unique_key_columns,
+            "key_columns": DUPLICATE_GRAIN_COLUMNS,
             "duplicate_key_count": len(duplicate_keys),
-            "duplicate_row_count": sum(duplicate_keys.values()),
+            "duplicate_row_count": sum(count - 1 for count in duplicate_keys.values()),
+            "identical_duplicate_key_count": identical_duplicate_key_count,
+            "identical_duplicate_removed_row_count": identical_duplicate_row_count,
+            "conflict_key_count": conflict_key_count,
+            "conflict_row_count": conflict_row_count,
             "examples": dict(list(duplicate_keys.items())[:10]),
         },
         "source_files": [
@@ -348,6 +447,7 @@ def transform(
             "processed": path_for_report(processed_path),
             "unmapped_products": path_for_report(unmapped_path),
             "rejected_rows": path_for_report(rejected_path),
+            "conflicting_rows": path_for_report(conflicting_rows_path),
             "summary": path_for_report(summary_path),
         },
     }
