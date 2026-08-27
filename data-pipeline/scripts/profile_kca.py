@@ -453,9 +453,16 @@ def profile_file(path: Path, rules: dict[str, Any]) -> dict[str, Any]:
 
 def resolve_input_path(path_text: str) -> Path:
     path = Path(path_text)
-    if not path.is_absolute():
-        path = ROOT / path
-    return path
+    if path.is_absolute():
+        return path
+
+    cwd_candidate = Path.cwd() / path
+    root_candidate = ROOT / path
+    if cwd_candidate.exists():
+        return cwd_candidate
+    if root_candidate.exists():
+        return root_candidate
+    return cwd_candidate
 
 
 def collect_csv_files_from_path(path: Path) -> list[Path]:
