@@ -34,6 +34,7 @@ Table price_observation {
   store_id bigint [not null]
   survey_date date [not null]
   price int [not null]
+  unit_price decimal(10,2)
   is_sale boolean
   is_one_plus_one boolean
 
