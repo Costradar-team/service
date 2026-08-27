@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Generated KCA processed outputs
+data-pipeline/data/processed/
+
+# Local environment variables
+.env

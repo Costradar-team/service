@@ -1,0 +1,50 @@
+Table canonical_item {
+  canonical_item_id bigint [pk, increment]
+  name varchar(50)
+}
+
+Table item_subtype {
+  subtype_id bigint [pk, increment]
+  canonical_item_id bigint [not null]
+  name varchar(100)
+}
+
+Table manufacturer {
+  manufacturer_id bigint [pk, increment]
+  name varchar(100)
+}
+
+Table product {
+  product_id bigint [pk, increment]
+  source_product_name varchar(255) [not null]
+  manufacturer_id bigint
+  subtype_id bigint [not null]
+  quantity decimal(10,2)
+  unit varchar(20)
+}
+
+Table store {
+  store_id bigint [pk, increment]
+  name varchar(255) [not null]
+}
+
+Table price_observation {
+  price_observation_id bigint [pk, increment]
+  product_id bigint [not null]
+  store_id bigint [not null]
+  survey_date date [not null]
+  price int [not null]
+  unit_price decimal(10,2)
+  is_sale boolean
+  is_one_plus_one boolean
+
+  indexes {
+    (product_id, store_id, survey_date) [unique]
+  }
+}
+
+Ref: item_subtype.canonical_item_id > canonical_item.canonical_item_id
+Ref: product.subtype_id > item_subtype.subtype_id
+Ref: product.manufacturer_id > manufacturer.manufacturer_id
+Ref: price_observation.product_id > product.product_id
+Ref: price_observation.store_id > store.store_id
