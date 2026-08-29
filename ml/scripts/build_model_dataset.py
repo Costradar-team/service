@@ -24,8 +24,29 @@ DEFAULT_OUTPUT_DIR = REPO_ROOT / "artifacts" / "ml"
 NORMALIZED_FILENAME = "normalized_prices.csv"
 MODEL_DATASET_FILENAME = "model_dataset.csv"
 PRODUCT_OUTPUT_DIRNAME = "product"
+BRAND_OUTPUT_DIRNAME = "brand"
+STORE_OUTPUT_DIRNAME = "store"
 REJECTED_FILENAME = "unit_normalization_rejected.csv"
 SUMMARY_FILENAME = "dataset_summary.json"
+
+BRAND_PREFIX_RULES = (
+    ("홈플러스익스프레스", "홈플러스"),
+    ("홈플러스", "홈플러스"),
+    ("롯데마트", "롯데마트·슈퍼"),
+    ("롯데슈퍼", "롯데마트·슈퍼"),
+    ("GS더프레시", "GS더프레시"),
+    ("이마트24", "이마트24"),
+    ("이마트", "이마트"),
+    ("(주)농협하나로유통", "농협하나로마트"),
+    ("(주)농협유통", "농협하나로마트"),
+    ("신세계백화점", "신세계백화점"),
+    ("현대백화점", "현대백화점"),
+    ("롯데백화점", "롯데백화점"),
+    ("메가마트", "메가마트"),
+    ("GS25", "GS25"),
+    ("CU", "CU"),
+    ("세븐일레븐", "세븐일레븐"),
+)
 
 SPEC_PATTERN = re.compile(
     r"^\s*(?P<quantity>\d+(?:\.\d+)?)\s*(?P<unit>kg|g|l|ml|개|개입)\s*$",
@@ -41,6 +62,8 @@ NORMALIZED_COLUMNS = [
     "조사일",
     "판매가격",
     "판매업소",
+    "brand_name",
+    "store_name",
     "제조사",
     "세일여부",
     "원플러스원",
@@ -80,6 +103,32 @@ PRODUCT_MODEL_COLUMNS = [
     "max_unit_price",
 ]
 
+BRAND_MODEL_COLUMNS = [
+    "survey_date",
+    "product_name",
+    "canonical_item",
+    "subtype",
+    "brand_name",
+    "unit_price_basis",
+    "observation_count",
+    "store_count",
+    "min_unit_price",
+    "median_unit_price",
+    "max_unit_price",
+]
+
+STORE_MODEL_COLUMNS = [
+    "survey_date",
+    "product_name",
+    "canonical_item",
+    "subtype",
+    "brand_name",
+    "store_name",
+    "unit_price_basis",
+    "observation_count",
+    "actual_unit_price",
+]
+
 REJECTED_COLUMNS = [
     "상품명",
     "조사일",
@@ -111,6 +160,14 @@ def format_number(value: float, digits: int = 4) -> str:
 
 def parse_price(value: str) -> int:
     return int(value.strip().replace(",", ""))
+
+
+def infer_brand_name(store_name: str) -> str:
+    normalized_store_name = store_name.strip()
+    for prefix, brand_name in BRAND_PREFIX_RULES:
+        if normalized_store_name.startswith(prefix):
+            return brand_name
+    return "기타"
 
 
 def normalize_unit_price(
@@ -179,6 +236,12 @@ def build_model_dataset(
     product_output_dir = output_dir / PRODUCT_OUTPUT_DIRNAME
     product_output_dir.mkdir(parents=True, exist_ok=True)
     product_model_path = product_output_dir / MODEL_DATASET_FILENAME
+    brand_output_dir = output_dir / BRAND_OUTPUT_DIRNAME
+    brand_output_dir.mkdir(parents=True, exist_ok=True)
+    brand_model_path = brand_output_dir / MODEL_DATASET_FILENAME
+    store_output_dir = output_dir / STORE_OUTPUT_DIRNAME
+    store_output_dir.mkdir(parents=True, exist_ok=True)
+    store_model_path = store_output_dir / MODEL_DATASET_FILENAME
     rejected_path = output_dir / REJECTED_FILENAME
     summary_path = output_dir / SUMMARY_FILENAME
 
@@ -188,6 +251,14 @@ def build_model_dataset(
     ] = {}
     product_aggregates: dict[
         tuple[str, str, str, str, str],
+        dict[str, Any],
+    ] = {}
+    brand_aggregates: dict[
+        tuple[str, str, str, str, str, str],
+        dict[str, Any],
+    ] = {}
+    store_aggregates: dict[
+        tuple[str, str, str, str, str, str, str],
         dict[str, Any],
     ] = {}
     input_count = 0
@@ -241,6 +312,8 @@ def build_model_dataset(
                 for column in NORMALIZED_COLUMNS
                 if column
                 not in {
+                    "brand_name",
+                    "store_name",
                     "package_quantity",
                     "package_unit",
                     "base_quantity",
@@ -248,8 +321,14 @@ def build_model_dataset(
                     "unit_price_basis",
                 }
             }
+            store_name = (row.get("판매업소") or "").strip()
+            if not store_name:
+                store_name = "판매업소 미확인"
+            brand_name = infer_brand_name(store_name)
             output_row.update(
                 {
+                    "brand_name": brand_name,
+                    "store_name": store_name,
                     "package_quantity": format_number(
                         normalized.package_quantity,
                         3,
@@ -297,8 +376,38 @@ def build_model_dataset(
             )
             product_accumulator["prices"].append(normalized.unit_price)
             product_accumulator["stores"].add(
-                (row.get("판매업소") or "").strip()
+                store_name
             )
+
+            brand_key = (
+                survey_date,
+                product_name,
+                canonical_item,
+                subtype,
+                brand_name,
+                normalized.unit_price_basis,
+            )
+            brand_accumulator = brand_aggregates.setdefault(
+                brand_key,
+                {"prices": [], "stores": set()},
+            )
+            brand_accumulator["prices"].append(normalized.unit_price)
+            brand_accumulator["stores"].add(store_name)
+
+            store_key = (
+                survey_date,
+                product_name,
+                canonical_item,
+                subtype,
+                brand_name,
+                store_name,
+                normalized.unit_price_basis,
+            )
+            store_accumulator = store_aggregates.setdefault(
+                store_key,
+                {"prices": []},
+            )
+            store_accumulator["prices"].append(normalized.unit_price)
             item_row_counts[canonical_item] += 1
             item_dates.setdefault(canonical_item, set()).add(survey_date)
 
@@ -364,6 +473,79 @@ def build_model_dataset(
         writer.writeheader()
         writer.writerows(product_model_rows)
 
+    brand_model_rows = []
+    for (
+        survey_date,
+        product_name,
+        canonical_item,
+        subtype,
+        brand_name,
+        basis,
+    ), accumulator in sorted(brand_aggregates.items()):
+        prices = accumulator["prices"]
+        brand_model_rows.append(
+            {
+                "survey_date": survey_date,
+                "product_name": product_name,
+                "canonical_item": canonical_item,
+                "subtype": subtype,
+                "brand_name": brand_name,
+                "unit_price_basis": basis,
+                "observation_count": len(prices),
+                "store_count": len(accumulator["stores"]),
+                "min_unit_price": format_number(min(prices), 4),
+                "median_unit_price": format_number(median(prices), 4),
+                "max_unit_price": format_number(max(prices), 4),
+            }
+        )
+
+    with brand_model_path.open(
+        "w", encoding="utf-8-sig", newline=""
+    ) as brand_model_file:
+        writer = csv.DictWriter(
+            brand_model_file,
+            fieldnames=BRAND_MODEL_COLUMNS,
+        )
+        writer.writeheader()
+        writer.writerows(brand_model_rows)
+
+    store_model_rows = []
+    for (
+        survey_date,
+        product_name,
+        canonical_item,
+        subtype,
+        brand_name,
+        store_name,
+        basis,
+    ), accumulator in sorted(store_aggregates.items()):
+        prices = accumulator["prices"]
+        store_model_rows.append(
+            {
+                "survey_date": survey_date,
+                "product_name": product_name,
+                "canonical_item": canonical_item,
+                "subtype": subtype,
+                "brand_name": brand_name,
+                "store_name": store_name,
+                "unit_price_basis": basis,
+                "observation_count": len(prices),
+                # Duplicate source observations are not expected. If they appear,
+                # their median is the single direct store price used for modeling.
+                "actual_unit_price": format_number(median(prices), 4),
+            }
+        )
+
+    with store_model_path.open(
+        "w", encoding="utf-8-sig", newline=""
+    ) as store_model_file:
+        writer = csv.DictWriter(
+            store_model_file,
+            fieldnames=STORE_MODEL_COLUMNS,
+        )
+        writer.writeheader()
+        writer.writerows(store_model_rows)
+
     all_dates = sorted({row["survey_date"] for row in model_rows})
     summary = {
         "input_row_count": input_count,
@@ -382,6 +564,35 @@ def build_model_dataset(
                 for row in product_model_rows
             }
         ),
+        "brand_model_row_count": len(brand_model_rows),
+        "brand_series_count": len(
+            {
+                (
+                    row["product_name"],
+                    row["canonical_item"],
+                    row["subtype"],
+                    row["brand_name"],
+                    row["unit_price_basis"],
+                )
+                for row in brand_model_rows
+            }
+        ),
+        "store_model_row_count": len(store_model_rows),
+        "store_series_count": len(
+            {
+                (
+                    row["product_name"],
+                    row["canonical_item"],
+                    row["subtype"],
+                    row["brand_name"],
+                    row["store_name"],
+                    row["unit_price_basis"],
+                )
+                for row in store_model_rows
+            }
+        ),
+        "brand_count": len({row["brand_name"] for row in store_model_rows}),
+        "store_count": len({row["store_name"] for row in store_model_rows}),
         "date_min": all_dates[0] if all_dates else None,
         "date_max": all_dates[-1] if all_dates else None,
         "unique_survey_date_count": len(all_dates),
@@ -393,6 +604,8 @@ def build_model_dataset(
             "normalized_prices": str(normalized_path),
             "model_dataset": str(model_path),
             "product_model_dataset": str(product_model_path),
+            "brand_model_dataset": str(brand_model_path),
+            "store_model_dataset": str(store_model_path),
             "rejected_rows": str(rejected_path),
             "summary": str(summary_path),
         },

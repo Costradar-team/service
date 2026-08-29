@@ -23,9 +23,23 @@ PRODUCT_SERIES_COLUMNS = (
     "product_name",
     "unit_price_basis",
 )
+BRAND_SERIES_COLUMNS = (
+    "canonical_item",
+    "subtype",
+    "product_name",
+    "brand_name",
+    "unit_price_basis",
+)
+STORE_SERIES_COLUMNS = (
+    "canonical_item",
+    "subtype",
+    "product_name",
+    "brand_name",
+    "store_name",
+    "unit_price_basis",
+)
 BASE_PREDICTION_COLUMNS = [
     "as_of_date",
-    "current_median_unit_price",
     "naive_next_price",
     "rolling_mean_next_price",
     "rolling_window",
@@ -97,13 +111,29 @@ def evaluate_baselines(
         series_columns = SUBTYPE_SERIES_COLUMNS
     elif series_level == "product":
         series_columns = PRODUCT_SERIES_COLUMNS
+    elif series_level == "brand":
+        series_columns = BRAND_SERIES_COLUMNS
+    elif series_level == "store":
+        series_columns = STORE_SERIES_COLUMNS
     else:
-        raise ValueError("series_level must be 'subtype' or 'product'")
+        raise ValueError(
+            "series_level must be 'subtype', 'product', 'brand', or 'store'"
+        )
+    target_column = (
+        "actual_unit_price" if series_level == "store" else "median_unit_price"
+    )
+    current_price_column = (
+        "last_actual_unit_price"
+        if series_level == "store"
+        else "current_median_unit_price"
+    )
 
     series: dict[tuple[str, ...], list[tuple[str, float]]] = defaultdict(list)
     with input_path.open("r", encoding="utf-8-sig", newline="") as source_file:
         reader = csv.DictReader(source_file)
-        missing_columns = set(series_columns).difference(reader.fieldnames or [])
+        missing_columns = {target_column, *series_columns}.difference(
+            reader.fieldnames or []
+        )
         if missing_columns:
             raise ValueError(
                 f"Missing {series_level} series columns: {sorted(missing_columns)}"
@@ -111,7 +141,7 @@ def evaluate_baselines(
         for row in reader:
             key = tuple(row[column] for column in series_columns)
             series[key].append(
-                (row["survey_date"], float(row["median_unit_price"]))
+                (row["survey_date"], float(row[target_column]))
             )
 
     records_by_model: dict[str, list[dict[str, Any]]] = {
@@ -158,7 +188,7 @@ def evaluate_baselines(
             {
                 "as_of_date": latest_date,
                 **identifiers,
-                "current_median_unit_price": round(latest_price, 4),
+                current_price_column: round(latest_price, 4),
                 "naive_next_price": round(latest_price, 4),
                 "rolling_mean_next_price": round(
                     mean(latest_history[-rolling_window:]),
@@ -190,11 +220,12 @@ def evaluate_baselines(
         "notes": [
             "Metrics use chronological one-step-ahead evaluation.",
             "These baselines are reference points, not production forecasts.",
-            (
-                "Store-level rows are aggregated by product before evaluation."
-                if series_level == "product"
-                else "Store and product rows are aggregated by subtype before evaluation."
-            ),
+            {
+                "subtype": "Store and product rows are aggregated by subtype.",
+                "product": "Store-level rows are aggregated by product.",
+                "brand": "Store-level rows are aggregated by product and brand.",
+                "store": "Targets are direct observed product prices for each store.",
+            }[series_level],
         ],
     }
 
@@ -213,6 +244,7 @@ def evaluate_baselines(
             fieldnames=[
                 "as_of_date",
                 *series_columns,
+                current_price_column,
                 *BASE_PREDICTION_COLUMNS[1:],
             ],
         )
@@ -255,7 +287,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--series-level",
-        choices=["subtype", "product"],
+        choices=["subtype", "product", "brand", "store"],
         default="subtype",
         help="Prediction grain used to identify independent price series.",
     )

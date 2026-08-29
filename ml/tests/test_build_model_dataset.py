@@ -8,6 +8,7 @@ from pathlib import Path
 
 from ml.scripts.build_model_dataset import (
     build_model_dataset,
+    infer_brand_name,
     normalize_unit_price,
 )
 
@@ -45,13 +46,25 @@ class NormalizeUnitPriceTest(unittest.TestCase):
 
 
 class BuildModelDatasetTest(unittest.TestCase):
+    def test_infers_supported_store_brands(self) -> None:
+        self.assertEqual(infer_brand_name("이마트월계점"), "이마트")
+        self.assertEqual(
+            infer_brand_name("롯데슈퍼G강남점"),
+            "롯데마트·슈퍼",
+        )
+        self.assertEqual(
+            infer_brand_name("GS더프레시강남대치점"),
+            "GS더프레시",
+        )
+        self.assertEqual(infer_brand_name("알 수 없는 매장"), "기타")
+
     def test_builds_date_level_median(self) -> None:
         rows = [
             {
                 "상품명": "밀가루 A(1kg)",
                 "조사일": "2026-01-01",
                 "판매가격": "2000",
-                "판매업소": "마트 A",
+                "판매업소": "이마트A점",
                 "제조사": "A",
                 "세일여부": "",
                 "원플러스원": "",
@@ -63,7 +76,7 @@ class BuildModelDatasetTest(unittest.TestCase):
                 "상품명": "밀가루 B(500g)",
                 "조사일": "2026-01-01",
                 "판매가격": "1200",
-                "판매업소": "마트 B",
+                "판매업소": "롯데슈퍼B점",
                 "제조사": "B",
                 "세일여부": "",
                 "원플러스원": "",
@@ -75,7 +88,7 @@ class BuildModelDatasetTest(unittest.TestCase):
                 "상품명": "밀가루 A(1kg)",
                 "조사일": "2026-01-08",
                 "판매가격": "2500",
-                "판매업소": "마트 A",
+                "판매업소": "이마트A점",
                 "제조사": "A",
                 "세일여부": "",
                 "원플러스원": "",
@@ -105,6 +118,14 @@ class BuildModelDatasetTest(unittest.TestCase):
                 "r", encoding="utf-8-sig", newline=""
             ) as product_model_file:
                 product_rows = list(csv.DictReader(product_model_file))
+            with (output_dir / "brand" / "model_dataset.csv").open(
+                "r", encoding="utf-8-sig", newline=""
+            ) as brand_model_file:
+                brand_rows = list(csv.DictReader(brand_model_file))
+            with (output_dir / "store" / "model_dataset.csv").open(
+                "r", encoding="utf-8-sig", newline=""
+            ) as store_model_file:
+                store_rows = list(csv.DictReader(store_model_file))
 
             self.assertEqual(summary["normalized_row_count"], 3)
             self.assertEqual(summary["unique_survey_date_count"], 2)
@@ -116,6 +137,17 @@ class BuildModelDatasetTest(unittest.TestCase):
             self.assertEqual(len(product_rows), 3)
             self.assertEqual(product_rows[0]["product_name"], "밀가루 A(1kg)")
             self.assertEqual(product_rows[0]["median_unit_price"], "2000")
+            self.assertEqual(summary["brand_model_row_count"], 3)
+            self.assertEqual(summary["brand_series_count"], 2)
+            self.assertEqual(summary["store_model_row_count"], 3)
+            self.assertEqual(summary["store_series_count"], 2)
+            self.assertEqual(summary["brand_count"], 2)
+            self.assertEqual(summary["store_count"], 2)
+            self.assertEqual(len(brand_rows), 3)
+            self.assertEqual(len(store_rows), 3)
+            self.assertEqual(store_rows[0]["brand_name"], "이마트")
+            self.assertEqual(store_rows[0]["store_name"], "이마트A점")
+            self.assertEqual(store_rows[0]["actual_unit_price"], "2000")
             persisted_summary = json.loads(
                 (output_dir / "dataset_summary.json").read_text(encoding="utf-8")
             )

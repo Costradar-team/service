@@ -12,7 +12,7 @@ import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import OneHotEncoder, TargetEncoder
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -26,6 +26,21 @@ PRODUCT_GROUP_COLUMNS = [
     "product_name",
     "unit_price_basis",
 ]
+BRAND_GROUP_COLUMNS = [
+    "canonical_item",
+    "subtype",
+    "product_name",
+    "brand_name",
+    "unit_price_basis",
+]
+STORE_GROUP_COLUMNS = [
+    "canonical_item",
+    "subtype",
+    "product_name",
+    "brand_name",
+    "store_name",
+    "unit_price_basis",
+]
 NUMERIC_FEATURES = [
     "date_ordinal",
     "month_sin",
@@ -37,13 +52,13 @@ NUMERIC_FEATURES = [
     "rolling_mean_4",
     "rolling_std_4",
 ]
-TARGET_COLUMN = "median_unit_price"
+MEDIAN_TARGET_COLUMN = "median_unit_price"
+STORE_TARGET_COLUMN = "actual_unit_price"
 TRAINING_TARGET_COLUMN = "target_change_ratio"
 
 MODEL_FILENAME = "price_model.joblib"
 METADATA_FILENAME = "training_report.json"
 BACKTEST_FILENAME = "backtest_predictions.csv"
-FORECAST_FILENAME = "future_predictions.csv"
 
 
 def resolve_cli_path(path_text: str) -> Path:
@@ -56,7 +71,20 @@ def group_columns_for(series_level: str) -> list[str]:
         return SUBTYPE_GROUP_COLUMNS
     if series_level == "product":
         return PRODUCT_GROUP_COLUMNS
-    raise ValueError("series_level must be 'subtype' or 'product'")
+    if series_level == "brand":
+        return BRAND_GROUP_COLUMNS
+    if series_level == "store":
+        return STORE_GROUP_COLUMNS
+    raise ValueError(
+        "series_level must be 'subtype', 'product', 'brand', or 'store'"
+    )
+
+
+def target_column_for(series_level: str) -> str:
+    if series_level == "store":
+        return STORE_TARGET_COLUMN
+    group_columns_for(series_level)
+    return MEDIAN_TARGET_COLUMN
 
 
 def smape(actual: np.ndarray, predicted: np.ndarray) -> float:
@@ -98,10 +126,11 @@ def build_supervised_dataset(
     series_level: str = "subtype",
 ) -> pd.DataFrame:
     group_columns = group_columns_for(series_level)
+    target_column = target_column_for(series_level)
     required_columns = {
         "survey_date",
         *group_columns,
-        TARGET_COLUMN,
+        target_column,
     }
     missing = required_columns.difference(model_dataset.columns)
     if missing:
@@ -109,17 +138,17 @@ def build_supervised_dataset(
 
     frame = model_dataset.copy()
     frame["survey_date"] = pd.to_datetime(frame["survey_date"], errors="raise")
-    frame[TARGET_COLUMN] = pd.to_numeric(frame[TARGET_COLUMN], errors="raise")
+    frame[target_column] = pd.to_numeric(frame[target_column], errors="raise")
     frame = frame.sort_values(group_columns + ["survey_date"]).reset_index(drop=True)
 
-    series_sizes = frame.groupby(group_columns, observed=True)[TARGET_COLUMN].transform(
+    series_sizes = frame.groupby(group_columns, observed=True)[target_column].transform(
         "size"
     )
     frame = frame.loc[series_sizes >= minimum_series_points].copy()
     if frame.empty:
         raise ValueError("No series has enough observations for training.")
 
-    grouped = frame.groupby(group_columns, observed=True)[TARGET_COLUMN]
+    grouped = frame.groupby(group_columns, observed=True)[target_column]
     for lag in (1, 2, 4):
         frame[f"lag_{lag}"] = grouped.shift(lag)
 
@@ -139,7 +168,7 @@ def build_supervised_dataset(
 
     frame = frame.dropna(subset=NUMERIC_FEATURES).reset_index(drop=True)
     frame[TRAINING_TARGET_COLUMN] = (
-        frame[TARGET_COLUMN] - frame["lag_1"]
+        frame[target_column] - frame["lag_1"]
     ) / frame["lag_1"]
     return frame
 
@@ -203,11 +232,27 @@ def create_pipeline(
     series_level: str = "subtype",
 ) -> Pipeline:
     categorical_features = group_columns_for(series_level)
+    categorical_encoder: Any
+    if series_level == "store":
+        # Store names are high-cardinality. Cross-fitted target encoding keeps the
+        # shared direct-price model compact without assigning fake numeric order.
+        categorical_encoder = TargetEncoder(
+            target_type="continuous",
+            smooth="auto",
+            cv=5,
+            shuffle=True,
+            random_state=random_state,
+        )
+    else:
+        categorical_encoder = OneHotEncoder(
+            handle_unknown="ignore",
+            sparse_output=False,
+        )
     preprocessor = ColumnTransformer(
         transformers=[
             (
                 "categorical",
-                OneHotEncoder(handle_unknown="ignore", sparse_output=False),
+                categorical_encoder,
                 categorical_features,
             ),
             ("numeric", "passthrough", NUMERIC_FEATURES),
@@ -220,52 +265,6 @@ def create_pipeline(
             ("regressor", create_estimator(estimator_name, random_state)),
         ]
     )
-
-
-def build_future_features(
-    raw_model_dataset: pd.DataFrame,
-    minimum_series_points: int,
-    series_level: str = "subtype",
-) -> pd.DataFrame:
-    group_columns = group_columns_for(series_level)
-    frame = raw_model_dataset.copy()
-    frame["survey_date"] = pd.to_datetime(frame["survey_date"], errors="raise")
-    frame[TARGET_COLUMN] = pd.to_numeric(frame[TARGET_COLUMN], errors="raise")
-    rows = []
-
-    for key, group in frame.groupby(group_columns, observed=True):
-        group = group.sort_values("survey_date")
-        if len(group) < minimum_series_points:
-            continue
-        prices = group[TARGET_COLUMN].tolist()
-        dates = group["survey_date"].tolist()
-        intervals = [
-            (dates[index] - dates[index - 1]).days
-            for index in range(1, len(dates))
-            if (dates[index] - dates[index - 1]).days > 0
-        ]
-        next_interval_days = int(np.median(intervals)) if intervals else 14
-        forecast_date = dates[-1] + pd.Timedelta(days=next_interval_days)
-        month_angle = 2 * math.pi * forecast_date.month / 12
-        row = dict(zip(group_columns, key))
-        row.update(
-            {
-                "forecast_date": forecast_date,
-                "as_of_date": dates[-1],
-                "current_median_unit_price": prices[-1],
-                "date_ordinal": forecast_date.toordinal(),
-                "month_sin": math.sin(month_angle),
-                "month_cos": math.cos(month_angle),
-                "lag_1": prices[-1],
-                "lag_2": prices[-2],
-                "lag_4": prices[-4],
-                "rolling_mean_2": float(np.mean(prices[-2:])),
-                "rolling_mean_4": float(np.mean(prices[-4:])),
-                "rolling_std_4": float(np.std(prices[-4:])),
-            }
-        )
-        rows.append(row)
-    return pd.DataFrame(rows)
 
 
 def train_price_model(
@@ -281,6 +280,7 @@ def train_price_model(
         raise FileNotFoundError(f"Model dataset not found: {input_path}")
 
     group_columns = group_columns_for(series_level)
+    target_column = target_column_for(series_level)
     feature_columns = group_columns + NUMERIC_FEATURES
     raw = pd.read_csv(input_path, encoding="utf-8-sig")
     supervised = build_supervised_dataset(
@@ -289,14 +289,14 @@ def train_price_model(
         series_level=series_level,
     )
     train, test, test_dates = split_by_date(supervised, test_fraction)
-    pipeline = create_pipeline(estimator_name, random_state, series_level)
-    pipeline.fit(train[feature_columns], train[TRAINING_TARGET_COLUMN])
+    evaluation_pipeline = create_pipeline(estimator_name, random_state, series_level)
+    evaluation_pipeline.fit(train[feature_columns], train[TRAINING_TARGET_COLUMN])
 
-    predicted_change_ratios = pipeline.predict(test[feature_columns])
+    predicted_change_ratios = evaluation_pipeline.predict(test[feature_columns])
     model_predictions = test["lag_1"].to_numpy(dtype=float) * (
         1 + predicted_change_ratios
     )
-    actual = test[TARGET_COLUMN].to_numpy(dtype=float)
+    actual = test[target_column].to_numpy(dtype=float)
     previous = test["lag_1"].to_numpy(dtype=float)
     naive_predictions = previous.copy()
 
@@ -308,13 +308,6 @@ def train_price_model(
             previous,
         ),
     }
-    model_beats_naive = (
-        metrics["model"]["smape_percent"]
-        < metrics["naive_last_value"]["smape_percent"]
-    )
-    recommended_forecaster = (
-        "trained_model" if model_beats_naive else "naive_last_value"
-    )
     by_item = {}
     for item in sorted(test["canonical_item"].unique()):
         mask = test["canonical_item"].to_numpy() == item
@@ -331,21 +324,33 @@ def train_price_model(
     model_path = output_dir / MODEL_FILENAME
     metadata_path = output_dir / METADATA_FILENAME
     backtest_path = output_dir / BACKTEST_FILENAME
-    forecast_path = output_dir / FORECAST_FILENAME
+
+    # Backtesting must only see the historical training partition. After evaluation,
+    # fit the persisted production model on every model-ready historical row. New
+    # observations can then be scored without fitting the model again.
+    production_pipeline = create_pipeline(estimator_name, random_state, series_level)
+    production_pipeline.fit(
+        supervised[feature_columns],
+        supervised[TRAINING_TARGET_COLUMN],
+    )
+    trained_through_date = supervised["survey_date"].max().date().isoformat()
     joblib.dump(
         {
-            "pipeline": pipeline,
+            "pipeline": production_pipeline,
             "series_level": series_level,
             "group_columns": group_columns,
             "feature_columns": feature_columns,
             "prediction_target": TRAINING_TARGET_COLUMN,
+            "source_target_column": target_column,
             "price_reconstruction": "lag_1 * (1 + predicted_change_ratio)",
+            "minimum_series_points": minimum_series_points,
+            "trained_through_date": trained_through_date,
         },
         model_path,
     )
 
     backtest = test[
-        ["survey_date", *group_columns, TARGET_COLUMN, "lag_1"]
+        ["survey_date", *group_columns, target_column, "lag_1"]
     ].copy()
     backtest["model_prediction"] = np.round(model_predictions, 4)
     backtest["naive_prediction"] = np.round(naive_predictions, 4)
@@ -354,46 +359,6 @@ def train_price_model(
         4,
     )
     backtest.to_csv(backtest_path, index=False, encoding="utf-8-sig")
-
-    future = build_future_features(
-        raw,
-        minimum_series_points,
-        series_level=series_level,
-    )
-    if future.empty:
-        raise ValueError("No series is eligible for a future forecast.")
-    future_change_ratios = pipeline.predict(future[feature_columns])
-    future_predictions = future["lag_1"].to_numpy(dtype=float) * (
-        1 + future_change_ratios
-    )
-    future_output = future[
-        [
-            "forecast_date",
-            "as_of_date",
-            *group_columns,
-            "current_median_unit_price",
-        ]
-    ].copy()
-    future_output["model_predicted_unit_price"] = np.round(future_predictions, 4)
-    future_output["model_predicted_change_percent"] = np.round(
-        (future_predictions - future["current_median_unit_price"].to_numpy())
-        / future["current_median_unit_price"].to_numpy()
-        * 100,
-        4,
-    )
-    future_output["naive_predicted_unit_price"] = future_output[
-        "current_median_unit_price"
-    ]
-    if model_beats_naive:
-        future_output["recommended_unit_price"] = future_output[
-            "model_predicted_unit_price"
-        ]
-    else:
-        future_output["recommended_unit_price"] = future_output[
-            "naive_predicted_unit_price"
-        ]
-    future_output["recommended_forecaster"] = recommended_forecaster
-    future_output.to_csv(forecast_path, index=False, encoding="utf-8-sig")
 
     report = {
         "series_level": series_level,
@@ -404,16 +369,17 @@ def train_price_model(
         "supervised_row_count": int(len(supervised)),
         "train_row_count": int(len(train)),
         "test_row_count": int(len(test)),
+        "production_fit_row_count": int(len(supervised)),
+        "model_trained_through_date": trained_through_date,
+        "minimum_series_points": minimum_series_points,
         "train_date_min": train["survey_date"].min().date().isoformat(),
         "train_date_max": train["survey_date"].max().date().isoformat(),
         "test_dates": [pd.Timestamp(value).date().isoformat() for value in test_dates],
         "feature_columns": feature_columns,
-        "source_target_column": TARGET_COLUMN,
+        "source_target_column": target_column,
         "training_target_column": TRAINING_TARGET_COLUMN,
         "metrics": metrics,
         "metrics_by_canonical_item": by_item,
-        "model_beats_naive_by_smape": model_beats_naive,
-        "recommended_forecaster": recommended_forecaster,
         "limitations": [
             "The dataset has few unique survey dates, so this is an MVP prototype.",
             "Backtesting is chronological and one-step-ahead, not a multi-step production forecast.",
@@ -423,7 +389,6 @@ def train_price_model(
             "model": str(model_path),
             "report": str(metadata_path),
             "backtest_predictions": str(backtest_path),
-            "future_predictions": str(forecast_path),
         },
     }
     metadata_path.write_text(
@@ -454,7 +419,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--series-level",
-        choices=["subtype", "product"],
+        choices=["subtype", "product", "brand", "store"],
         default="subtype",
         help="Prediction grain used to identify independent price series.",
     )

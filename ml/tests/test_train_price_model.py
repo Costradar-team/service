@@ -80,6 +80,41 @@ class TrainPriceModelTest(unittest.TestCase):
         self.assertEqual(first_b["lag_1"], 5030)
         self.assertEqual(first_b["lag_4"], 5000)
 
+    def test_store_features_use_each_stores_direct_actual_prices(self) -> None:
+        rows = []
+        for store_name, start_price in [
+            ("이마트A점", 1000),
+            ("이마트B점", 5000),
+        ]:
+            for index, survey_date in enumerate(
+                pd.date_range("2026-01-01", periods=8, freq="14D")
+            ):
+                rows.append(
+                    {
+                        "survey_date": survey_date.date().isoformat(),
+                        "canonical_item": "밀가루",
+                        "subtype": "박력분",
+                        "product_name": "상품 A",
+                        "brand_name": "이마트",
+                        "store_name": store_name,
+                        "unit_price_basis": "KRW/kg",
+                        "actual_unit_price": start_price + index * 10,
+                    }
+                )
+
+        supervised = build_supervised_dataset(
+            pd.DataFrame(rows),
+            minimum_series_points=6,
+            series_level="store",
+        )
+        first_b = supervised.loc[
+            (supervised["store_name"] == "이마트B점")
+            & (supervised["survey_date"] == pd.Timestamp("2026-02-26"))
+        ].iloc[0]
+        self.assertEqual(first_b["lag_1"], 5030)
+        self.assertEqual(first_b["lag_4"], 5000)
+        self.assertEqual(first_b["actual_unit_price"], 5040)
+
 
 if __name__ == "__main__":
     unittest.main()
