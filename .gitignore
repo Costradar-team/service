@@ -222,8 +222,6 @@ data-pipeline/data/processed/
 
 # Generated data pipeline reports
 data-pipeline/reports/*
-!data-pipeline/reports/item_mapping/
-!data-pipeline/reports/item_mapping/**
 
 # Local environment variables
 .env

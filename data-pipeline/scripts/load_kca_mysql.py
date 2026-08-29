@@ -227,6 +227,12 @@ def log_failure(log_path: Path, table_name: str, reason: str, payload: dict[str,
         )
 
 
+def is_foreign_key_integrity_error(exc: IntegrityError) -> bool:
+    original = getattr(exc, "orig", None)
+    error_code = getattr(original, "args", [None])[0]
+    return error_code in {1451, 1452}
+
+
 def load_env_file(path: Path) -> None:
     if not path.exists():
         return
@@ -551,8 +557,8 @@ def load_price_observations(
     inserted_total = 0
     skipped_total = 0
 
-    # Fact rows are committed per batch. A failed batch is rolled back and logged,
-    # while later batches can still load because all parent FKs have already been secured.
+    # Fact rows are committed per batch. Non-FK batch failures are rolled back and logged,
+    # while FK constraint failures stop loading because they indicate broken load ordering.
     for batch in chunked(observation_rows, batch_size):
         keys = [(row["product_id"], row["store_id"], row["survey_date"]) for row in batch]
         try:
@@ -585,6 +591,9 @@ def load_price_observations(
             table_report.failed += len(batch)
             table_report.failed_batches += 1
             log_failure(log_path, "price_observation", f"integrity_error: {exc}", {"rows": batch})
+            if is_foreign_key_integrity_error(exc):
+                logging.exception("price_observation FK batch failed and was rolled back. Stopping load.")
+                raise
             logging.exception("price_observation batch failed and was rolled back.")
             continue
         except DBAPIError as exc:
