@@ -211,7 +211,6 @@ def profile_csv_files(
         )
         if not columns:
             columns = file_columns
-
         missing_columns = [
             column for column in required_columns if column not in file_columns
         ]
