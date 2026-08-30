@@ -220,5 +220,8 @@ __marimo__/
 # Generated KCA processed outputs
 data-pipeline/data/processed/
 
+# Generated data pipeline reports
+data-pipeline/reports/*
+
 # Local environment variables
 .env

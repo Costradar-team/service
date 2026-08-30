@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 import pandas as pd
@@ -38,18 +37,10 @@ def empty_numeric_profile() -> dict[str, Any]:
     }
 
 
-def is_null(value: str, null_values: set[str]) -> bool:
-    return value.strip() in null_values
-
-
-def numeric_values(
-    series: pd.Series,
-    allow_thousands_separator: bool,
-) -> pd.Series:
-    values = normalized_text(series)
-    if allow_thousands_separator:
-        values = values.str.replace(",", "", regex=False)
-    return pd.to_numeric(values, errors="coerce")
+def is_null(value: Any, null_values: set[str]) -> bool:
+    if value is None or pd.isna(value):
+        return True
+    return str(value).strip() in null_values
 
 
 def profile_dataframe(
@@ -63,104 +54,105 @@ def profile_dataframe(
     columns = columns or list(df.columns)
     row_count = len(df)
     null_values = set(rules.get("null_values", [""]))
+    date_columns = rules.get("date_columns", {})
+    numeric_columns = rules.get("numeric_columns", {})
+    unique_keys = rules.get("unique_keys", [])
     missing_columns_by_file = missing_columns_by_file or {}
     unexpected_columns_by_file = unexpected_columns_by_file or {}
 
     null_profile = {}
     for column in columns:
-        values = normalized_text(df[column])
-        null_count = int(values.isin(null_values).sum())
+        if column not in df.columns:
+            null_count = row_count
+        else:
+            null_count = int(df[column].map(lambda value: is_null(value, null_values)).sum())
         null_profile[column] = {
             "null_count": null_count,
             "null_rate": round(null_count / row_count, 6) if row_count else 0,
         }
 
-    date_profiles = {}
-    for column, date_rule in rules.get("date_columns", {}).items():
-        if column not in df.columns:
+    date_profiles = {
+        column: empty_date_profile()
+        for column in date_columns
+        if column in columns
+    }
+    for column, date_rule in date_columns.items():
+        if column not in date_profiles or column not in df.columns:
             continue
 
-        profile = empty_date_profile()
-        date_format = date_rule["format"]
-        for value in normalized_text(df[column]):
-            if is_null(value, null_values):
-                continue
-
-            profile["non_null_count"] += 1
-            try:
-                parsed_date = datetime.strptime(value, date_format).date()
-            except ValueError:
-                profile["unparsed_count"] += 1
-                if len(profile["invalid_examples"]) < 5:
-                    profile["invalid_examples"].append(value)
-                continue
-
-            parsed_date_text = parsed_date.isoformat()
-            profile["parsed_count"] += 1
-            if profile["min"] is None or parsed_date_text < profile["min"]:
-                profile["min"] = parsed_date_text
-            if profile["max"] is None or parsed_date_text > profile["max"]:
-                profile["max"] = parsed_date_text
-
-        non_null_count = profile["non_null_count"]
-        profile["parse_rate"] = (
-            round(profile["parsed_count"] / non_null_count, 6)
-            if non_null_count
-            else 0
-        )
-        date_profiles[column] = profile
-
-    numeric_profiles = {}
-    for column, numeric_rule in rules.get("numeric_columns", {}).items():
-        if column not in df.columns:
-            continue
-
-        profile = empty_numeric_profile()
+        profile = date_profiles[column]
         values = normalized_text(df[column])
-        parsed_values = numeric_values(
-            values,
-            numeric_rule.get("allow_thousands_separator", False),
+        non_null_values = values[~values.isin(null_values)]
+        parsed_dates = pd.to_datetime(
+            non_null_values,
+            format=date_rule["format"],
+            errors="coerce",
         )
-        for value, parsed_number in zip(values, parsed_values):
-            if is_null(value, null_values):
-                profile["null_count"] += 1
-                continue
+        valid_dates = parsed_dates.dropna()
+        invalid_values = non_null_values[parsed_dates.isna()]
 
-            profile["non_null_count"] += 1
-            if pd.isna(parsed_number):
-                profile["parse_fail_count"] += 1
-                if len(profile["invalid_examples"]) < 5:
-                    profile["invalid_examples"].append(value)
-                continue
-
-            parsed_int = int(parsed_number)
-            profile["parsed_count"] += 1
-            if parsed_int == 0:
-                profile["zero_count"] += 1
-            elif parsed_int < 0:
-                profile["negative_count"] += 1
-            else:
-                profile["positive_count"] += 1
-
-            if profile["min"] is None or parsed_int < profile["min"]:
-                profile["min"] = parsed_int
-            if profile["max"] is None or parsed_int > profile["max"]:
-                profile["max"] = parsed_int
-
-        non_null_count = profile["non_null_count"]
+        profile["non_null_count"] = int(len(non_null_values))
+        profile["parsed_count"] = int(len(valid_dates))
+        profile["unparsed_count"] = int(len(invalid_values))
+        profile["invalid_examples"] = invalid_values.head(5).tolist()
+        if not valid_dates.empty:
+            profile["min"] = valid_dates.min().date().isoformat()
+            profile["max"] = valid_dates.max().date().isoformat()
         profile["parse_rate"] = (
-            round(profile["parsed_count"] / non_null_count, 6)
-            if non_null_count
+            round(profile["parsed_count"] / profile["non_null_count"], 6)
+            if profile["non_null_count"]
             else 0
         )
-        numeric_profiles[column] = profile
+
+    numeric_profiles = {
+        column: empty_numeric_profile()
+        for column in numeric_columns
+        if column in columns
+    }
+    for column, numeric_rule in numeric_columns.items():
+        if column not in numeric_profiles or column not in df.columns:
+            continue
+
+        profile = numeric_profiles[column]
+        values = normalized_text(df[column])
+        null_mask = values.isin(null_values)
+        non_null_values = values[~null_mask]
+        normalized_numbers = non_null_values
+        if numeric_rule.get("allow_thousands_separator", False):
+            normalized_numbers = normalized_numbers.str.replace(",", "", regex=False)
+
+        valid_mask = normalized_numbers.str.fullmatch(r"[+-]?\d+")
+        parsed_numbers = normalized_numbers[valid_mask].astype("int64")
+        invalid_values = non_null_values[~valid_mask]
+
+        profile["null_count"] = int(null_mask.sum())
+        profile["non_null_count"] = int(len(non_null_values))
+        profile["parsed_count"] = int(len(parsed_numbers))
+        profile["parse_fail_count"] = int(len(invalid_values))
+        profile["zero_count"] = int((parsed_numbers == 0).sum())
+        profile["negative_count"] = int((parsed_numbers < 0).sum())
+        profile["positive_count"] = int((parsed_numbers > 0).sum())
+        profile["invalid_examples"] = invalid_values.head(5).tolist()
+        if not parsed_numbers.empty:
+            profile["min"] = int(parsed_numbers.min())
+            profile["max"] = int(parsed_numbers.max())
+        profile["parse_rate"] = (
+            round(profile["parsed_count"] / profile["non_null_count"], 6)
+            if profile["non_null_count"]
+            else 0
+        )
 
     duplicate_profiles = {}
-    for key_rule in rules.get("unique_keys", []):
+    for key_rule in unique_keys:
+        key_name = key_rule["name"]
         key_columns = key_rule["columns"]
-        missing_columns = [column for column in key_columns if column not in df.columns]
+        missing_columns = [
+            column
+            for column in key_columns
+            if column not in columns or column not in df.columns
+        ]
         if missing_columns:
-            duplicate_profiles[key_rule["name"]] = {
+            duplicate_profiles[key_name] = {
                 "columns": key_columns,
                 "skipped": True,
                 "reason": "One or more key columns are missing.",
@@ -174,19 +166,23 @@ def profile_dataframe(
                 for column in key_columns
             }
         )
-        key_counts = key_frame.value_counts()
-        duplicate_items = key_counts[key_counts > 1]
-        duplicate_profiles[key_rule["name"]] = {
+        key_counts = key_frame.value_counts(sort=False)
+        duplicate_items = [
+            (tuple(key) if isinstance(key, tuple) else (key,), int(count))
+            for key, count in key_counts.items()
+            if int(count) > 1
+        ]
+        duplicate_profiles[key_name] = {
             "columns": key_columns,
             "skipped": False,
-            "duplicate_key_count": int(len(duplicate_items)),
-            "duplicate_row_count": int((duplicate_items - 1).sum()),
+            "duplicate_key_count": len(duplicate_items),
+            "duplicate_row_count": sum(count - 1 for _, count in duplicate_items),
             "duplicate_examples": [
                 {
-                    "key": dict(zip(key_columns, key if isinstance(key, tuple) else (key,))),
-                    "count": int(count),
+                    "key": dict(zip(key_columns, key)),
+                    "count": count,
                 }
-                for key, count in duplicate_items.head(5).items()
+                for key, count in duplicate_items[:5]
             ],
         }
 

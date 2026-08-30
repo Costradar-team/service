@@ -1,3 +1,9 @@
+<<<<<<< HEAD
 requests>=2.32.0
 SQLAlchemy>=2.0.0
 PyMySQL>=1.1.0
+=======
+pandas
+PyMySQL
+SQLAlchemy
+>>>>>>> 34d9f990b87d8cedfa8f93979045230ef58a4f59
