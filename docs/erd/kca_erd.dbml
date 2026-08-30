@@ -16,6 +16,8 @@ Table item_subtype {
 Table manufacturer {
   manufacturer_id bigint [pk, increment]
   name varchar(100) [not null, unique]
+
+  Note: '상품 제조사. 판매처 체인/브랜드는 retailer로 별도 관리'
 }
 
 Table product {
@@ -31,9 +33,25 @@ Table product {
   }
 }
 
+Table retailer {
+  retailer_id bigint [pk, increment]
+  name varchar(255) [not null, unique]
+
+  Note: '판매처 체인/브랜드. 예: 이마트, 롯데마트, 홈플러스, GS더프레시'
+}
+
 Table store {
   store_id bigint [pk, increment]
-  name varchar(255) [not null, unique]
+  retailer_id bigint [not null]
+  name varchar(255) [not null]
+  source_store_name varchar(255) [not null, unique]
+
+  indexes {
+    (retailer_id, name) [unique]
+  }
+
+  Note: '개별 지점. 예: 이마트 월계점, 이마트 왕십리점
+  원천 데이터를 보관하기 위해 source store name 을 추가'
 }
 
 Table price_observation {
@@ -54,5 +72,6 @@ Table price_observation {
 Ref: item_subtype.canonical_item_id > canonical_item.canonical_item_id
 Ref: product.subtype_id > item_subtype.subtype_id
 Ref: product.manufacturer_id > manufacturer.manufacturer_id
+Ref: store.retailer_id > retailer.retailer_id
 Ref: price_observation.product_id > product.product_id
 Ref: price_observation.store_id > store.store_id

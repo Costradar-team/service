@@ -59,6 +59,7 @@ PARENT_TABLE_ORDER = [
     "item_subtype",
     "manufacturer",
     "product",
+    "retailer",
     "store",
 ]
 LOAD_TABLE_ORDER = PARENT_TABLE_ORDER + ["price_observation"]
@@ -104,11 +105,21 @@ product = Table(
     Column("unit", String(20)),
 )
 
+retailer = Table(
+    "retailer",
+    metadata,
+    Column("retailer_id", BigInteger, primary_key=True, autoincrement=True),
+    Column("name", String(255), nullable=False, unique=True),
+)
+
 store = Table(
     "store",
     metadata,
     Column("store_id", BigInteger, primary_key=True, autoincrement=True),
-    Column("name", String(255), nullable=False, unique=True),
+    Column("retailer_id", BigInteger, ForeignKey("retailer.retailer_id"), nullable=False),
+    Column("name", String(255), nullable=False),
+    Column("source_store_name", String(255), nullable=False, unique=True),
+    UniqueConstraint("retailer_id", "name", name="uq_store_retailer_name"),
 )
 
 price_observation = Table(
@@ -133,6 +144,8 @@ class ProcessedRow:
     survey_date: date
     price: int
     store_name: str
+    retailer_name: str
+    store_branch_name: str
     manufacturer_name: str
     is_sale: bool | None
     is_one_plus_one: bool | None
@@ -184,6 +197,25 @@ class MissingRequiredValueError(LoadError):
 
 class ForeignKeyMappingError(LoadError):
     pass
+
+
+KNOWN_RETAILER_PREFIXES = [
+    "(주)농협하나로유통",
+    "(주)농협유통",
+    "현대백화점",
+    "롯데백화점",
+    "신세계백화점",
+    "홈플러스",
+    "롯데마트",
+    "롯데슈퍼",
+    "GS더프레시",
+    "세븐일레븐",
+    "이마트에브리데이",
+    "이마트",
+    "하나로마트",
+    "GS25",
+    "CU",
+]
 
 
 def chunked(values: Sequence[dict[str, Any]], size: int) -> Iterable[list[dict[str, Any]]]:
@@ -291,6 +323,22 @@ def parse_spec(spec: str) -> tuple[Decimal | None, str | None]:
     return Decimal(match.group(1)), match.group(2)
 
 
+def split_store_name(source_store_name: str) -> tuple[str, str]:
+    normalized = re.sub(r"\s+", " ", source_store_name).strip()
+    if not normalized:
+        raise MissingRequiredValueError("store name is empty")
+
+    if " " in normalized:
+        chain_name, branch_name = normalized.rsplit(" ", 1)
+        return chain_name, branch_name
+
+    for retailer_name in KNOWN_RETAILER_PREFIXES:
+        if normalized.startswith(retailer_name) and len(normalized) > len(retailer_name):
+            return retailer_name, normalized[len(retailer_name) :]
+
+    return normalized, "본점"
+
+
 def normalize_csv_row(row: dict[str, str], row_number: int) -> ProcessedRow:
     missing = [column for column in REQUIRED_COLUMNS if not (row.get(column) or "").strip()]
     required_nullable_in_source = {"세일여부", "원플러스원"}
@@ -300,12 +348,16 @@ def normalize_csv_row(row: dict[str, str], row_number: int) -> ProcessedRow:
 
     try:
         quantity, unit = parse_spec(row["spec"])
+        store_name = row["판매업소"].strip()
+        retailer_name, store_branch_name = split_store_name(store_name)
         return ProcessedRow(
             row_number=row_number,
             source_product_name=row["상품명"].strip(),
             survey_date=date.fromisoformat(row["조사일"].strip()),
             price=int(row["판매가격"].strip().replace(",", "")),
-            store_name=row["판매업소"].strip(),
+            store_name=store_name,
+            retailer_name=retailer_name,
+            store_branch_name=store_branch_name,
             manufacturer_name=row["제조사"].strip(),
             is_sale=parse_bool(row.get("세일여부", "")),
             is_one_plus_one=parse_bool(row.get("원플러스원", "")),
@@ -514,6 +566,40 @@ def load_products(
     )
 
 
+def load_stores(
+    engine: Engine,
+    table_report: TableReport,
+    rows: Sequence[ProcessedRow],
+    retailer_ids: dict[str, int],
+    batch_size: int,
+) -> dict[str, int]:
+    store_rows = []
+    for row in rows:
+        retailer_id = retailer_ids.get(row.retailer_name)
+        if retailer_id is None:
+            raise ForeignKeyMappingError(
+                f"Missing retailer FK for row {row.row_number}: {row.retailer_name}"
+            )
+        store_rows.append(
+            {
+                "retailer_id": retailer_id,
+                "name": row.store_branch_name,
+                "source_store_name": row.store_name,
+            }
+        )
+
+    store_rows = unique_dicts(store_rows, ["source_store_name"])
+    return load_single_key_parent(
+        engine,
+        store,
+        table_report,
+        store_rows,
+        "source_store_name",
+        "store_id",
+        batch_size,
+    )
+
+
 def load_price_observations(
     engine: Engine,
     table_report: TableReport,
@@ -669,13 +755,20 @@ def run_load(
         canonical_ids,
         batch_size,
     )
-    store_ids = load_single_key_parent(
+    retailer_ids = load_single_key_parent(
         engine,
-        store,
-        report.tables["store"],
-        [{"name": row.store_name} for row in rows],
+        retailer,
+        report.tables["retailer"],
+        [{"name": row.retailer_name} for row in rows],
         "name",
-        "store_id",
+        "retailer_id",
+        batch_size,
+    )
+    store_ids = load_stores(
+        engine,
+        report.tables["store"],
+        rows,
+        retailer_ids,
         batch_size,
     )
     load_price_observations(
