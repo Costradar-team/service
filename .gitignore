@@ -223,5 +223,9 @@ data-pipeline/data/processed/
 # Generated local pipeline and ML artifacts
 artifacts/
 
+# Local agent working records
+AGENTS.md
+PROJECT_STATUS.md
+
 # Local environment variables
 .env
