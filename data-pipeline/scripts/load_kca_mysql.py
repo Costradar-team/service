@@ -136,6 +136,45 @@ price_observation = Table(
     UniqueConstraint("product_id", "store_id", "survey_date", name="uq_price_product_store_date"),
 )
 
+fis_item = Table(
+    "fis_item",
+    metadata,
+    Column("fis_item_id", BigInteger, primary_key=True, autoincrement=True),
+    Column(
+        "canonical_item_id",
+        BigInteger,
+        ForeignKey("canonical_item.canonical_item_id"),
+        nullable=False,
+    ),
+    Column("item_key", String(50), nullable=False, unique=True),
+    Column("cmdt_id", String(30), nullable=False),
+    Column("cmdt_se_cd", String(20), nullable=False),
+    Column("item_name", String(100), nullable=False),
+    Column("price_unit", String(30), nullable=False),
+    Column("converted_unit", String(30)),
+    Column("relation_type", String(30), nullable=False),
+    UniqueConstraint("cmdt_se_cd", "cmdt_id", name="uq_fis_item_source_code"),
+)
+
+fis_price_observation = Table(
+    "fis_price_observation",
+    metadata,
+    Column("fis_price_observation_id", BigInteger, primary_key=True, autoincrement=True),
+    Column("fis_item_id", BigInteger, ForeignKey("fis_item.fis_item_id"), nullable=False),
+    Column("contract_month", String(7), nullable=False),
+    Column("trade_date", Date, nullable=False),
+    Column("close_price", DECIMAL(12, 4), nullable=False),
+    Column("change_amount", DECIMAL(12, 4)),
+    Column("change_rate_pct", DECIMAL(8, 4)),
+    Column("converted_price", DECIMAL(12, 4)),
+    UniqueConstraint(
+        "fis_item_id",
+        "contract_month",
+        "trade_date",
+        name="uq_fis_price_item_contract_trade_date",
+    ),
+)
+
 
 @dataclass(frozen=True)
 class ProcessedRow:

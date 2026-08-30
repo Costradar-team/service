@@ -121,8 +121,13 @@ def profile_dataframe(
         if numeric_rule.get("allow_thousands_separator", False):
             normalized_numbers = normalized_numbers.str.replace(",", "", regex=False)
 
-        valid_mask = normalized_numbers.str.fullmatch(r"[+-]?\d+")
-        parsed_numbers = normalized_numbers[valid_mask].astype("int64")
+        number_type = numeric_rule.get("type", "integer")
+        if number_type == "decimal":
+            valid_mask = normalized_numbers.str.fullmatch(r"[+-]?(?:\d+\.?\d*|\.\d+)")
+            parsed_numbers = normalized_numbers[valid_mask].astype("float64")
+        else:
+            valid_mask = normalized_numbers.str.fullmatch(r"[+-]?\d+")
+            parsed_numbers = normalized_numbers[valid_mask].astype("int64")
         invalid_values = non_null_values[~valid_mask]
 
         profile["null_count"] = int(null_mask.sum())
@@ -134,8 +139,12 @@ def profile_dataframe(
         profile["positive_count"] = int((parsed_numbers > 0).sum())
         profile["invalid_examples"] = invalid_values.head(5).tolist()
         if not parsed_numbers.empty:
-            profile["min"] = int(parsed_numbers.min())
-            profile["max"] = int(parsed_numbers.max())
+            if number_type == "decimal":
+                profile["min"] = float(parsed_numbers.min())
+                profile["max"] = float(parsed_numbers.max())
+            else:
+                profile["min"] = int(parsed_numbers.min())
+                profile["max"] = int(parsed_numbers.max())
         profile["parse_rate"] = (
             round(profile["parsed_count"] / profile["non_null_count"], 6)
             if profile["non_null_count"]
