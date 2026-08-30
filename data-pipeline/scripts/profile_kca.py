@@ -3,9 +3,12 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+import pandas as pd
+
+from profiling.common import normalized_text, profile_dataframe
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,49 +36,21 @@ def read_header(path: Path, encodings: list[str]) -> tuple[str, list[str]]:
     raise ValueError("At least one encoding must be provided.")
 
 
-def is_null(value: str | None, null_values: set[str]) -> bool:
-    if value is None:
-        return True
-    return value.strip() in null_values
+def path_for_report(path: Path) -> str:
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
 
 
-def empty_date_profile() -> dict[str, Any]:
-    return {
-        "non_null_count": 0,
-        "parsed_count": 0,
-        "unparsed_count": 0,
-        "parse_rate": 0,
-        "min": None,
-        "max": None,
-        "invalid_examples": [],
-    }
-
-
-def empty_numeric_profile() -> dict[str, Any]:
-    return {
-        "null_count": 0,
-        "non_null_count": 0,
-        "parsed_count": 0,
-        "parse_fail_count": 0,
-        "zero_count": 0,
-        "negative_count": 0,
-        "positive_count": 0,
-        "parse_rate": 0,
-        "min": None,
-        "max": None,
-        "invalid_examples": [],
-    }
-
-
-def parse_integer(value: str, allow_thousands_separator: bool) -> int:
-    normalized = value.strip()
-    if allow_thousands_separator:
-        normalized = normalized.replace(",", "")
-    return int(normalized)
-
-
-def make_key(row: dict[str, str], columns: list[str]) -> tuple[str, ...]:
-    return tuple((row.get(column) or "").strip() for column in columns)
+def read_csv_dataframe(path: Path, encoding: str, columns: list[str]) -> pd.DataFrame:
+    df = pd.read_csv(
+        path,
+        encoding=encoding,
+        dtype=str,
+        keep_default_na=False,
+    )
+    return df.reindex(columns=columns, fill_value="")
 
 
 def empty_item_accumulator() -> dict[str, Any]:
@@ -86,11 +61,130 @@ def empty_item_accumulator() -> dict[str, Any]:
     }
 
 
-def path_for_report(path: Path) -> str:
-    try:
-        return str(path.relative_to(ROOT))
-    except ValueError:
-        return str(path)
+def add_item_coverage_profile(
+    result: dict[str, Any],
+    df: pd.DataFrame,
+    rules: dict[str, Any],
+    columns: list[str],
+) -> None:
+    item_coverage_profiles = {}
+    for item_rule in rules.get("item_profiles", []):
+        profile_name = item_rule["name"]
+        required_columns = [
+            item_rule["item_column"],
+            item_rule["sku_column"],
+            item_rule["store_column"],
+        ]
+        if not all(column in columns and column in df.columns for column in required_columns):
+            item_coverage_profiles[profile_name] = {
+                "item_column": item_rule["item_column"],
+                "sku_column": item_rule["sku_column"],
+                "store_column": item_rule["store_column"],
+                "skipped": True,
+                "reason": "One or more item profile columns are missing.",
+            }
+            continue
+
+        item_series = normalized_text(df[item_rule["item_column"]])
+        sku_series = normalized_text(df[item_rule["sku_column"]])
+        store_series = normalized_text(df[item_rule["store_column"]])
+        profile_frame = pd.DataFrame(
+            {
+                "item": item_series,
+                "sku": sku_series,
+                "store": store_series,
+            }
+        )
+        row_counts = profile_frame.groupby("item", sort=True).size()
+        sku_counts = (
+            profile_frame[profile_frame["sku"] != ""]
+            .groupby("item", sort=True)["sku"]
+            .nunique()
+        )
+        store_counts = (
+            profile_frame[profile_frame["store"] != ""]
+            .groupby("item", sort=True)["store"]
+            .nunique()
+        )
+        items = {
+            str(item): {
+                "row_count": int(row_count),
+                "sku_count": int(sku_counts.get(item, 0)),
+                "store_count": int(store_counts.get(item, 0)),
+            }
+            for item, row_count in row_counts.items()
+        }
+        item_coverage_profiles[profile_name] = {
+            "item_column": item_rule["item_column"],
+            "sku_column": item_rule["sku_column"],
+            "store_column": item_rule["store_column"],
+            "skipped": False,
+            "item_count": len(items),
+            "items": items,
+        }
+
+    result["checks"]["item_coverage_profile"] = {
+        "mode": "profile_only",
+        "profile": item_coverage_profiles,
+    }
+
+
+def add_keyword_candidate_profile(
+    result: dict[str, Any],
+    df: pd.DataFrame,
+    rules: dict[str, Any],
+    columns: list[str],
+) -> None:
+    keyword_candidate_output = {}
+    for keyword_rule in rules.get("keyword_candidate_profiles", []):
+        profile_name = keyword_rule["name"]
+        column = keyword_rule["column"]
+        if column not in columns or column not in df.columns:
+            keyword_candidate_output[profile_name] = {
+                "column": column,
+                "keywords": keyword_rule["keywords"],
+                "skipped": True,
+                "reason": "Keyword candidate column is missing.",
+            }
+            continue
+
+        values = normalized_text(df[column])
+        matched_rows = []
+        for product_name in values:
+            matched_keywords = [
+                keyword
+                for keyword in keyword_rule["keywords"]
+                if keyword in product_name
+            ]
+            if not matched_keywords:
+                continue
+            matched_rows.append((product_name, matched_keywords))
+
+        candidates: dict[str, dict[str, Any]] = {}
+        for product_name, matched_keywords in matched_rows:
+            candidate = candidates.setdefault(product_name, {"row_count": 0, "keywords": set()})
+            candidate["row_count"] += 1
+            candidate["keywords"].update(matched_keywords)
+
+        candidate_items = {
+            product_name: {
+                "row_count": candidate["row_count"],
+                "keywords": sorted(candidate["keywords"]),
+            }
+            for product_name, candidate in sorted(candidates.items())
+        }
+        keyword_candidate_output[profile_name] = {
+            "column": column,
+            "keywords": keyword_rule["keywords"],
+            "skipped": False,
+            "candidate_count": len(candidate_items),
+            "candidates": candidate_items,
+        }
+
+    result["checks"]["keyword_candidate_profile"] = {
+        "mode": "profile_only",
+        "profile": keyword_candidate_output,
+    }
 
 
 def profile_csv_files(
@@ -99,13 +193,8 @@ def profile_csv_files(
     profile_name: str | None = None,
 ) -> dict[str, Any]:
     required_columns = rules["required_columns"]
-    null_values = set(rules["null_values"])
-    date_columns = rules.get("date_columns", {})
-    numeric_columns = rules.get("numeric_columns", {})
-    unique_keys = rules.get("unique_keys", [])
-    item_profiles = rules.get("item_profiles", [])
-    keyword_candidate_profiles = rules.get("keyword_candidate_profiles", [])
     sources = []
+    dataframes = []
     columns: list[str] = []
     missing_columns_by_file = {}
     unexpected_columns_by_file = {}
@@ -133,303 +222,23 @@ def profile_csv_files(
         if unexpected_columns:
             unexpected_columns_by_file[path_for_report(path)] = unexpected_columns
 
-    row_count = 0
-    null_counts = dict.fromkeys(columns, 0)
-    date_profiles = {
-        column: empty_date_profile()
-        for column in date_columns
-        if column in columns
-    }
-    numeric_profiles = {
-        column: empty_numeric_profile()
-        for column in numeric_columns
-        if column in columns
-    }
-    unique_key_counts: dict[str, dict[tuple[str, ...], int]] = {
-        key_rule["name"]: {}
-        for key_rule in unique_keys
-        if all(column in columns for column in key_rule["columns"])
-    }
-    item_profile_accumulators: dict[str, dict[str, dict[str, Any]]] = {
-        item_rule["name"]: {}
-        for item_rule in item_profiles
-        if all(
-            item_rule[column_name] in columns
-            for column_name in ("item_column", "sku_column", "store_column")
-        )
-    }
-    keyword_candidate_accumulators: dict[str, dict[str, dict[str, Any]]] = {
-        keyword_rule["name"]: {}
-        for keyword_rule in keyword_candidate_profiles
-        if keyword_rule["column"] in columns
-    }
+        dataframes.append(read_csv_dataframe(path, encoding, columns))
 
-    for source in sources:
-        with source["path"].open("r", encoding=source["encoding"], newline="") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                row_count += 1
-                for column in columns:
-                    if is_null(row.get(column), null_values):
-                        null_counts[column] += 1
-                for column, date_rule in date_columns.items():
-                    if column not in date_profiles:
-                        continue
-                    value = row.get(column)
-                    if is_null(value, null_values):
-                        continue
+    df = (
+        pd.concat(dataframes, ignore_index=True)
+        if dataframes
+        else pd.DataFrame(columns=columns)
+    )
+    result = profile_dataframe(
+        df,
+        rules,
+        columns=columns,
+        missing_columns_by_file=missing_columns_by_file,
+        unexpected_columns_by_file=unexpected_columns_by_file,
+    )
+    add_item_coverage_profile(result, df, rules, columns)
+    add_keyword_candidate_profile(result, df, rules, columns)
 
-                    profile = date_profiles[column]
-                    date_format = date_rule["format"]
-                    profile["non_null_count"] += 1
-                    try:
-                        parsed_date = datetime.strptime(
-                            value.strip(),
-                            date_format,
-                        ).date()
-                    except ValueError:
-                        profile["unparsed_count"] += 1
-                        if len(profile["invalid_examples"]) < 5:
-                            profile["invalid_examples"].append(value)
-                        continue
-
-                    parsed_date_text = parsed_date.isoformat()
-                    profile["parsed_count"] += 1
-                    if profile["min"] is None or parsed_date_text < profile["min"]:
-                        profile["min"] = parsed_date_text
-                    if profile["max"] is None or parsed_date_text > profile["max"]:
-                        profile["max"] = parsed_date_text
-                for column, numeric_rule in numeric_columns.items():
-                    if column not in numeric_profiles:
-                        continue
-
-                    value = row.get(column)
-                    profile = numeric_profiles[column]
-                    if is_null(value, null_values):
-                        profile["null_count"] += 1
-                        continue
-
-                    profile["non_null_count"] += 1
-                    try:
-                        parsed_number = parse_integer(
-                            value,
-                            numeric_rule.get("allow_thousands_separator", False),
-                        )
-                    except ValueError:
-                        profile["parse_fail_count"] += 1
-                        if len(profile["invalid_examples"]) < 5:
-                            profile["invalid_examples"].append(value)
-                        continue
-
-                    profile["parsed_count"] += 1
-                    if parsed_number == 0:
-                        profile["zero_count"] += 1
-                    elif parsed_number < 0:
-                        profile["negative_count"] += 1
-                    else:
-                        profile["positive_count"] += 1
-
-                    if profile["min"] is None or parsed_number < profile["min"]:
-                        profile["min"] = parsed_number
-                    if profile["max"] is None or parsed_number > profile["max"]:
-                        profile["max"] = parsed_number
-                for key_rule in unique_keys:
-                    key_name = key_rule["name"]
-                    if key_name not in unique_key_counts:
-                        continue
-                    key = make_key(row, key_rule["columns"])
-                    unique_key_counts[key_name][key] = (
-                        unique_key_counts[key_name].get(key, 0) + 1
-                    )
-                for item_rule in item_profiles:
-                    item_profile_name = item_rule["name"]
-                    if item_profile_name not in item_profile_accumulators:
-                        continue
-
-                    item_value = (row.get(item_rule["item_column"]) or "").strip()
-                    sku_value = (row.get(item_rule["sku_column"]) or "").strip()
-                    store_value = (row.get(item_rule["store_column"]) or "").strip()
-                    accumulator = item_profile_accumulators[
-                        item_profile_name
-                    ].setdefault(
-                        item_value,
-                        empty_item_accumulator(),
-                    )
-                    accumulator["row_count"] += 1
-                    if sku_value:
-                        accumulator["skus"].add(sku_value)
-                    if store_value:
-                        accumulator["stores"].add(store_value)
-                for keyword_rule in keyword_candidate_profiles:
-                    keyword_profile_name = keyword_rule["name"]
-                    if keyword_profile_name not in keyword_candidate_accumulators:
-                        continue
-
-                    value = (row.get(keyword_rule["column"]) or "").strip()
-                    matched_keywords = [
-                        keyword
-                        for keyword in keyword_rule["keywords"]
-                        if keyword in value
-                    ]
-                    if not matched_keywords:
-                        continue
-
-                    candidates = keyword_candidate_accumulators[keyword_profile_name]
-                    candidate = candidates.setdefault(
-                        value,
-                        {
-                            "row_count": 0,
-                            "keywords": set(),
-                        },
-                    )
-                    candidate["row_count"] += 1
-                    candidate["keywords"].update(matched_keywords)
-
-    null_profile = {
-        column: {
-            "null_count": null_count,
-            "null_rate": round(null_count / row_count, 6) if row_count else 0,
-        }
-        for column, null_count in null_counts.items()
-    }
-    for profile in date_profiles.values():
-        non_null_count = profile["non_null_count"]
-        profile["parse_rate"] = (
-            round(profile["parsed_count"] / non_null_count, 6)
-            if non_null_count
-            else 0
-        )
-    for profile in numeric_profiles.values():
-        non_null_count = profile["non_null_count"]
-        profile["parse_rate"] = (
-            round(profile["parsed_count"] / non_null_count, 6)
-            if non_null_count
-            else 0
-        )
-    duplicate_profiles = {}
-    for key_rule in unique_keys:
-        key_name = key_rule["name"]
-        key_counts = unique_key_counts.get(key_name)
-        if key_counts is None:
-            duplicate_profiles[key_name] = {
-                "columns": key_rule["columns"],
-                "skipped": True,
-                "reason": "One or more key columns are missing.",
-            }
-            continue
-
-        duplicate_items = [
-            (key, count)
-            for key, count in key_counts.items()
-            if count > 1
-        ]
-        duplicate_profiles[key_name] = {
-            "columns": key_rule["columns"],
-            "skipped": False,
-            "duplicate_key_count": len(duplicate_items),
-            "duplicate_row_count": sum(count - 1 for _, count in duplicate_items),
-            "duplicate_examples": [
-                {
-                    "key": dict(zip(key_rule["columns"], key)),
-                    "count": count,
-                }
-                for key, count in duplicate_items[:5]
-            ],
-        }
-    item_coverage_profiles = {}
-    for item_rule in item_profiles:
-        profile_name = item_rule["name"]
-        accumulators = item_profile_accumulators.get(profile_name)
-        if accumulators is None:
-            item_coverage_profiles[profile_name] = {
-                "item_column": item_rule["item_column"],
-                "sku_column": item_rule["sku_column"],
-                "store_column": item_rule["store_column"],
-                "skipped": True,
-                "reason": "One or more item profile columns are missing.",
-            }
-            continue
-
-        items = {
-            item: {
-                "row_count": accumulator["row_count"],
-                "sku_count": len(accumulator["skus"]),
-                "store_count": len(accumulator["stores"]),
-            }
-            for item, accumulator in sorted(accumulators.items())
-        }
-        item_coverage_profiles[profile_name] = {
-            "item_column": item_rule["item_column"],
-            "sku_column": item_rule["sku_column"],
-            "store_column": item_rule["store_column"],
-            "skipped": False,
-            "item_count": len(items),
-            "items": items,
-        }
-    keyword_candidate_output = {}
-    for keyword_rule in keyword_candidate_profiles:
-        profile_name = keyword_rule["name"]
-        candidates = keyword_candidate_accumulators.get(profile_name)
-        if candidates is None:
-            keyword_candidate_output[profile_name] = {
-                "column": keyword_rule["column"],
-                "keywords": keyword_rule["keywords"],
-                "skipped": True,
-                "reason": "Keyword candidate column is missing.",
-            }
-            continue
-
-        candidate_items = {
-            product_name: {
-                "row_count": candidate["row_count"],
-                "keywords": sorted(candidate["keywords"]),
-            }
-            for product_name, candidate in sorted(candidates.items())
-        }
-        keyword_candidate_output[profile_name] = {
-            "column": keyword_rule["column"],
-            "keywords": keyword_rule["keywords"],
-            "skipped": False,
-            "candidate_count": len(candidate_items),
-            "candidates": candidate_items,
-        }
-
-    result = {
-        "row_count": row_count,
-        "column_count": len(columns),
-        "columns": columns,
-        "checks": {
-            "required_columns_present": {
-                "passed": not missing_columns_by_file,
-                "missing_columns_by_file": missing_columns_by_file,
-                "unexpected_columns_by_file": unexpected_columns_by_file,
-            },
-            "column_null_profile": {
-                "mode": "profile_only",
-                "profile": null_profile,
-            },
-            "date_parse_profile": {
-                "mode": "profile_only",
-                "profile": date_profiles,
-            },
-            "numeric_value_profile": {
-                "mode": "profile_only",
-                "profile": numeric_profiles,
-            },
-            "duplicate_key_profile": {
-                "mode": "profile_only",
-                "profile": duplicate_profiles,
-            },
-            "item_coverage_profile": {
-                "mode": "profile_only",
-                "profile": item_coverage_profiles,
-            },
-            "keyword_candidate_profile": {
-                "mode": "profile_only",
-                "profile": keyword_candidate_output,
-            }
-        },
-    }
     if len(sources) == 1:
         result["file"] = sources[0]["file"]
         result["encoding"] = sources[0]["encoding"]
