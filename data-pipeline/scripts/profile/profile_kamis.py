@@ -3,17 +3,19 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts" / "collect"))
+
 from collect_kamis import PRODUCTS
 from profiling.common import normalized_text, profile_dataframe
 
-
-ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RULES_PATH = ROOT / "config" / "profiling_rules_kamis.json"
 DEFAULT_INPUT_PATH = ROOT / "data" / "raw" / "kamis"
 DEFAULT_OUTPUT_PATH = ROOT / "reports" / "profiling" / "profiling_summary_kamis.json"

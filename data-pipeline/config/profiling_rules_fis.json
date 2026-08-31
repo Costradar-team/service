@@ -1,0 +1,67 @@
+{
+  "dataset": "fis_commodity_daily_price",
+  "source_sample": "data/raw/fis/fis_wheat_srw_2025-08-01_2026-07-31.csv",
+  "encoding_candidates": [
+    "utf-8-sig"
+  ],
+  "required_columns": [
+    "product_key",
+    "fis_item",
+    "cmdt_id",
+    "cmdt_se_cd",
+    "unit",
+    "인도월",
+    "거래일자",
+    "전일대비",
+    "등락률(%)",
+    "환산가($/ton)"
+  ],
+  "null_values": [
+    ""
+  ],
+  "date_columns": {
+    "거래일자": {
+      "format": "%Y-%m-%d"
+    }
+  },
+  "numeric_columns": {
+    "close_price": {
+      "type": "decimal",
+      "allow_thousands_separator": true
+    },
+    "환산가($/ton)": {
+      "type": "decimal",
+      "allow_thousands_separator": true
+    }
+  },
+  "unique_keys": [
+    {
+      "name": "product_trade_date_delivery_month",
+      "columns": [
+        "product_key",
+        "거래일자",
+        "인도월"
+      ]
+    }
+  ],
+  "expected_products": {
+    "wheat_srw": {
+      "canonical_item": "밀가루",
+      "relation_type": "UPSTREAM_RAW_MATERIAL",
+      "fis_item": "소맥(SRW)",
+      "cmdt_id": "0601000002001103",
+      "cmdt_se_cd": "CORN",
+      "unit": "US¢/bu"
+    },
+    "white_sugar": {
+      "canonical_item": "설탕",
+      "relation_type": "SAME_COMMODITY",
+      "fis_item": "White Sugar",
+      "cmdt_id": "0701000002011303",
+      "cmdt_se_cd": "FOOD",
+      "unit": "USD/ton"
+    }
+  },
+  "expected_begin_date": "2025-08-01",
+  "expected_end_date": "2026-07-31"
+}

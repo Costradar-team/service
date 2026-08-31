@@ -69,6 +69,68 @@ Table price_observation {
   }
 }
 
+// FIS - 설탕, 밀가루 용도
+Table fis_item {
+  fis_item_id bigint [pk, increment]
+
+  // CostRadar 기준 품목
+  canonical_item_id bigint [not null]
+
+  // 내부 식별자 - 원천 코드 이외 정보 다루기 쉽도록 추가
+  item_key varchar(50) [not null, unique] // wheat_srw, white_sugar
+
+  // FIS 원천 식별 정보
+  cmdt_id varchar(30) [not null] // FIS에서 품목을 식별하는 코드
+  cmdt_se_cd varchar(20) [not null] // FIS에서 사용하는 품목 분류 코드
+
+  item_name varchar(100) [not null]
+
+  // 원본 종가 단위
+  price_unit varchar(30) [not null]
+
+  // 환산가 단위
+  converted_unit varchar(30)
+
+  // SAME_COMMODITY: canonical_item과 동일한 원재료
+  // UPSTREAM_RAW_MATERIAL: canonical_item의 상위 원재료/가격 선행 신호
+  relation_type varchar(30) [not null]
+
+  indexes {
+    (cmdt_se_cd, cmdt_id) [unique]
+  }
+}
+
+Table fis_price_observation {
+  fis_price_observation_id bigint [pk, increment]
+
+  fis_item_id bigint [not null]
+
+  // 선물 계약 인도월
+  contract_month char(7) [not null] // 2026-09
+
+  // 해당 가격이 시장에서 관측된 날짜
+  trade_date date [not null]
+
+  // 거래일에 해당 선물계약이 마지막으로 거래된 가격(종가)
+  close_price decimal(12,4) [not null]
+
+  // converted_unit 기준 단가
+  unit_price decimal(10,2)
+
+  // 전 거래일 대비 가격 변화량
+  change_amount decimal(12,4)
+
+  // 전 거래일 대비 가격 변화율
+  change_rate_pct decimal(8,4)
+
+  // 원래 종가를 converted_unit 기준으로 환산한 가격
+  converted_price decimal(12,4)
+
+  indexes {
+    (fis_item_id, contract_month, trade_date) [unique]
+  }
+}
+
 // kamis 
 Table kamis_item {
   kamis_item_id bigint [pk, increment]
@@ -121,6 +183,10 @@ Ref: product.manufacturer_id > manufacturer.manufacturer_id
 Ref: store.retailer_id > retailer.retailer_id
 Ref: price_observation.product_id > product.product_id
 Ref: price_observation.store_id > store.store_id
+
+//fis
+Ref: fis_price_observation.fis_item_id > fis_item.fis_item_id
+Ref: fis_item.canonical_item_id > canonical_item.canonical_item_id
 
 // kamis 
 Ref: kamis_item.canonical_item_id > canonical_item.canonical_item_id
