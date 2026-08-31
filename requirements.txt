@@ -1,3 +1,4 @@
-pandas
-PyMySQL
-SQLAlchemy
+requests>=2.32.0
+pandas>=2.0.0
+PyMySQL>=1.1.0
+SQLAlchemy>=2.0.0

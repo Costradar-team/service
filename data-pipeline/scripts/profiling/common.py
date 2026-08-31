@@ -5,6 +5,10 @@ from typing import Any
 import pandas as pd
 
 
+def normalized_text(series: pd.Series) -> pd.Series:
+    return series.fillna("").astype(str).str.strip()
+
+
 def empty_date_profile() -> dict[str, Any]:
     return {
         "non_null_count": 0,
@@ -39,26 +43,23 @@ def is_null(value: Any, null_values: set[str]) -> bool:
     return str(value).strip() in null_values
 
 
-def normalized_text(series: pd.Series) -> pd.Series:
-    return series.fillna("").astype(str).str.strip()
-
-
 def profile_dataframe(
     df: pd.DataFrame,
     rules: dict[str, Any],
+    *,
     columns: list[str] | None = None,
     missing_columns_by_file: dict[str, list[str]] | None = None,
     unexpected_columns_by_file: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     columns = columns or list(df.columns)
-    null_values = set(rules["null_values"])
+    row_count = len(df)
+    null_values = set(rules.get("null_values", [""]))
     date_columns = rules.get("date_columns", {})
     numeric_columns = rules.get("numeric_columns", {})
     unique_keys = rules.get("unique_keys", [])
     missing_columns_by_file = missing_columns_by_file or {}
     unexpected_columns_by_file = unexpected_columns_by_file or {}
 
-    row_count = len(df)
     null_profile = {}
     for column in columns:
         if column not in df.columns:
@@ -80,12 +81,11 @@ def profile_dataframe(
             continue
 
         profile = date_profiles[column]
-        date_format = date_rule["format"]
         values = normalized_text(df[column])
         non_null_values = values[~values.isin(null_values)]
         parsed_dates = pd.to_datetime(
             non_null_values,
-            format=date_format,
+            format=date_rule["format"],
             errors="coerce",
         )
         valid_dates = parsed_dates.dropna()
@@ -146,11 +146,17 @@ def profile_dataframe(
     for key_rule in unique_keys:
         key_name = key_rule["name"]
         key_columns = key_rule["columns"]
-        if not all(column in columns and column in df.columns for column in key_columns):
+        missing_columns = [
+            column
+            for column in key_columns
+            if column not in columns or column not in df.columns
+        ]
+        if missing_columns:
             duplicate_profiles[key_name] = {
                 "columns": key_columns,
                 "skipped": True,
                 "reason": "One or more key columns are missing.",
+                "missing_columns": missing_columns,
             }
             continue
 
@@ -162,7 +168,7 @@ def profile_dataframe(
         )
         key_counts = key_frame.value_counts(sort=False)
         duplicate_items = [
-            (tuple(key), int(count))
+            (tuple(key) if isinstance(key, tuple) else (key,), int(count))
             for key, count in key_counts.items()
             if int(count) > 1
         ]

@@ -1,0 +1,92 @@
+{
+  "dataset": "kamis_period_retail_product_price",
+  "source_sample": "data/raw/kamis",
+  "required_columns": [
+    "itemname",
+    "kindname",
+    "countyname",
+    "marketname",
+    "yyyy",
+    "regday",
+    "price"
+  ],
+  "null_values": [
+    ""
+  ],
+  "date_columns": {
+    "regday": {
+      "format": "%m/%d"
+    }
+  },
+  "combined_date_columns": [
+    {
+      "name": "survey_date",
+      "year_column": "yyyy",
+      "month_day_column": "regday",
+      "format": "%Y/%m/%d"
+    }
+  ],
+  "numeric_columns": {
+    "yyyy": {
+      "type": "integer",
+      "allow_thousands_separator": false
+    },
+    "price": {
+      "type": "integer",
+      "allow_thousands_separator": true
+    }
+  },
+  "unique_keys": [
+    {
+      "name": "year_day_county_market",
+      "columns": [
+        "yyyy",
+        "regday",
+        "countyname",
+        "marketname"
+      ]
+    }
+  ],
+  "value_distribution_profiles": [
+    {
+      "name": "item_kind_county_market_distribution",
+      "columns": [
+        "itemname",
+        "kindname",
+        "countyname",
+        "marketname"
+      ],
+      "top_n": 30
+    }
+  ],
+  "combination_profiles": [
+    {
+      "name": "item_kind",
+      "columns": [
+        "itemname",
+        "kindname"
+      ],
+      "top_n": 20
+    },
+    {
+      "name": "county_market",
+      "columns": [
+        "countyname",
+        "marketname"
+      ],
+      "top_n": 30
+    }
+  ],
+  "price_stat_combination_profiles": [
+    {
+      "name": "item_kind_county_price_stats",
+      "columns": [
+        "itemname",
+        "kindname",
+        "countyname"
+      ],
+      "date_column": "regday",
+      "price_column": "price"
+    }
+  ]
+}

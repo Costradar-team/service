@@ -69,9 +69,59 @@ Table price_observation {
   }
 }
 
+// kamis 
+Table kamis_item {
+  kamis_item_id bigint [pk, increment]
+
+  canonical_item_id bigint [not null]
+
+  item_category_code varchar(10) [not null]
+  item_code varchar(20) [not null]
+  item_name varchar(100) [not null]
+
+  //같은 품목 안의 품종/규격 구분 : 계란 21=특란10구, 23=특란30구
+  kind_code varchar(20) [not null]
+  kind_name varchar(100) [not null]
+
+  //품종 안의 등급/세부 분류 구분 : 계란 71=일반란, 소고기 01=1++등급
+  rank_code varchar(20) [not null]
+  rank_name varchar(100)
+
+  quantity decimal(10,2)
+  unit varchar(20)
+
+  indexes {
+    (item_category_code, item_code, kind_code, rank_code) [unique]
+  }
+}
+
+Table kamis_price_observation {
+  kamis_price_observation_id bigint [pk, increment]
+
+  kamis_item_id bigint [not null]
+
+  observed_date date [not null]
+  price int [not null]
+  unit_price decimal(10,2)
+
+  //가격이 어떤 범위/성격의 가격인지 : 전국, 평균, 평년
+  scope_name varchar(50) [not null]
+
+  indexes {
+    (kamis_item_id, observed_date, scope_name) [unique]
+    observed_date
+  }
+}
+
+
+
 Ref: item_subtype.canonical_item_id > canonical_item.canonical_item_id
 Ref: product.subtype_id > item_subtype.subtype_id
 Ref: product.manufacturer_id > manufacturer.manufacturer_id
 Ref: store.retailer_id > retailer.retailer_id
 Ref: price_observation.product_id > product.product_id
 Ref: price_observation.store_id > store.store_id
+
+// kamis 
+Ref: kamis_item.canonical_item_id > canonical_item.canonical_item_id
+Ref: kamis_price_observation.kamis_item_id > kamis_item.kamis_item_id
