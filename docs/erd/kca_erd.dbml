@@ -102,6 +102,7 @@ Table kamis_price_observation {
 
   observed_date date [not null]
   price int [not null]
+  unit_price decimal(10,2)
 
   //가격이 어떤 범위/성격의 가격인지 : 전국, 평균, 평년
   scope_name varchar(50) [not null]
