@@ -9,7 +9,7 @@ import re
 import sys
 from dataclasses import dataclass, field
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -164,6 +164,7 @@ fis_price_observation = Table(
     Column("contract_month", String(7), nullable=False),
     Column("trade_date", Date, nullable=False),
     Column("close_price", DECIMAL(12, 4), nullable=False),
+    Column("unit_price", DECIMAL(10, 2)),
     Column("change_amount", DECIMAL(12, 4)),
     Column("change_rate_pct", DECIMAL(8, 4)),
     Column("converted_price", DECIMAL(12, 4)),
@@ -188,6 +189,7 @@ class ProcessedRow:
     manufacturer_name: str
     is_sale: bool | None
     is_one_plus_one: bool | None
+    unit_price: Decimal | None
     canonical_item_name: str
     subtype_name: str
     quantity: Decimal | None
@@ -362,6 +364,22 @@ def parse_spec(spec: str) -> tuple[Decimal | None, str | None]:
     return Decimal(match.group(1)), match.group(2)
 
 
+def parse_decimal(value: str | None) -> Decimal | None:
+    normalized = (value or "").strip().replace(",", "")
+    if not normalized:
+        return None
+    try:
+        return Decimal(normalized)
+    except InvalidOperation as exc:
+        raise ValueError(f"invalid decimal: {value}") from exc
+
+
+def calculate_unit_price(price: int, quantity: Decimal | None) -> Decimal | None:
+    if quantity is None or quantity <= 0:
+        return None
+    return (Decimal(price) / quantity).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
 def split_store_name(source_store_name: str) -> tuple[str, str]:
     normalized = re.sub(r"\s+", " ", source_store_name).strip()
     if not normalized:
@@ -389,17 +407,20 @@ def normalize_csv_row(row: dict[str, str], row_number: int) -> ProcessedRow:
         quantity, unit = parse_spec(row["spec"])
         store_name = row["판매업소"].strip()
         retailer_name, store_branch_name = split_store_name(store_name)
+        price = int(row["판매가격"].strip().replace(",", ""))
+        unit_price = parse_decimal(row.get("unit_price"))
         return ProcessedRow(
             row_number=row_number,
             source_product_name=row["상품명"].strip(),
             survey_date=date.fromisoformat(row["조사일"].strip()),
-            price=int(row["판매가격"].strip().replace(",", "")),
+            price=price,
             store_name=store_name,
             retailer_name=retailer_name,
             store_branch_name=store_branch_name,
             manufacturer_name=row["제조사"].strip(),
             is_sale=parse_bool(row.get("세일여부", "")),
             is_one_plus_one=parse_bool(row.get("원플러스원", "")),
+            unit_price=unit_price if unit_price is not None else calculate_unit_price(price, quantity),
             canonical_item_name=row["canonical_item"].strip(),
             subtype_name=row["subtype"].strip(),
             quantity=quantity,
@@ -671,7 +692,7 @@ def load_price_observations(
                 "store_id": store_id,
                 "survey_date": row.survey_date,
                 "price": row.price,
-                "unit_price": None,
+                "unit_price": row.unit_price,
                 "is_sale": row.is_sale,
                 "is_one_plus_one": row.is_one_plus_one,
             }

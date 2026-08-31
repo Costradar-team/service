@@ -8,6 +8,7 @@ import sys
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any
 
@@ -79,6 +80,7 @@ PRICE_OBSERVATION_COLUMNS = [
     "price_scope_type",
     "scope_name",
     "price",
+    "unit_price",
 ]
 ITEM_KEY_COLUMNS = [
     "item_category_code",
@@ -215,6 +217,20 @@ def parse_price(value: Any) -> int:
     return price
 
 
+def unit_price_text(price: int, quantity_text: str) -> str:
+    try:
+        quantity = Decimal(quantity_text)
+    except InvalidOperation:
+        return ""
+    if quantity <= 0:
+        return ""
+    unit_price = (Decimal(price) / quantity).quantize(
+        Decimal("0.01"),
+        rounding=ROUND_HALF_UP,
+    )
+    return format(unit_price, "f")
+
+
 def reject_row(
     *,
     source: SourceFile,
@@ -323,6 +339,7 @@ def transform(
                 "price_scope_type": price_scope_type,
                 "scope_name": countyname,
                 "price": str(price),
+                "unit_price": unit_price_text(price, master["quantity"]),
             }
             grain = make_key(observation_row, PRICE_OBSERVATION_GRAIN_COLUMNS)
             existing_row = observation_rows_by_grain.get(grain)

@@ -38,6 +38,18 @@ FIS 원자재 가격 변환 결과를 현재 ERD의 `fis_item`, `fis_price_obser
 python data-pipeline\scripts\load\load_fis_mysql.py
 ```
 
+기존 DB에 `fis_price_observation.unit_price`를 추가하고 `converted_price` 값으로 백필할 때:
+
+```powershell
+python data-pipeline\scripts\load\migrate_fis_unit_price.py
+```
+
+기존 DB에 KCA/KAMIS observation `unit_price`를 추가/백필할 때:
+
+```powershell
+python data-pipeline\scripts\load\migrate_observation_unit_price.py
+```
+
 기본 입력 파일:
 
 ```text

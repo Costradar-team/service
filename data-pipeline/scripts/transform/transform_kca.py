@@ -3,9 +3,11 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +31,7 @@ MAPPING_COLUMNS = [
     "spec",
     "mapping_include",
 ]
-ADDED_COLUMNS = ["canonical_item", "subtype", "spec"]
+ADDED_COLUMNS = ["canonical_item", "subtype", "spec", "unit_price"]
 DUPLICATE_GRAIN_COLUMNS = ["상품명", "판매업소", "조사일"]
 REJECT_METADATA_COLUMNS = [
     "source_file",
@@ -132,6 +134,28 @@ def parse_integer(value: str, allow_thousands_separator: bool) -> int:
     if allow_thousands_separator:
         normalized = normalized.replace(",", "")
     return int(normalized)
+
+
+def parse_spec_quantity(spec: str) -> Decimal | None:
+    match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*([A-Za-z가-힣]+)\s*", spec)
+    if not match:
+        return None
+    try:
+        quantity = Decimal(match.group(1))
+    except InvalidOperation:
+        return None
+    return quantity if quantity > 0 else None
+
+
+def unit_price_text(price: int, spec: str) -> str:
+    quantity = parse_spec_quantity(spec)
+    if quantity is None:
+        return ""
+    unit_price = (Decimal(price) / quantity).quantize(
+        Decimal("0.01"),
+        rounding=ROUND_HALF_UP,
+    )
+    return format(unit_price, "f")
 
 
 def make_key(row: dict[str, str], columns: list[str]) -> tuple[str, ...]:
@@ -325,7 +349,8 @@ def transform(
                         continue
 
                     row["조사일"] = parse_date(row["조사일"], date_format)
-                    row["판매가격"] = str(parse_integer(row["판매가격"], allow_thousands_separator))
+                    price = parse_integer(row["판매가격"], allow_thousands_separator)
+                    row["판매가격"] = str(price)
 
                     product = row.get("상품명", "")
                     mapping_row = item_mapping.get(product)
@@ -339,6 +364,7 @@ def transform(
                     row["canonical_item"] = mapping_row["canonical_item"]
                     row["subtype"] = mapping_row["subtype"]
                     row["spec"] = mapping_row["spec"]
+                    row["unit_price"] = unit_price_text(price, row["spec"])
 
                     grain_key = make_key(row, DUPLICATE_GRAIN_COLUMNS)
                     duplicate_key_counts[grain_key] += 1

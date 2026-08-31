@@ -114,6 +114,9 @@ Table fis_price_observation {
   // 거래일에 해당 선물계약이 마지막으로 거래된 가격(종가)
   close_price decimal(12,4) [not null]
 
+  // converted_unit 기준 단가
+  unit_price decimal(10,2)
+
   // 전 거래일 대비 가격 변화량
   change_amount decimal(12,4)
 

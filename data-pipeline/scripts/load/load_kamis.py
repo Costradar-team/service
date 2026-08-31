@@ -392,6 +392,7 @@ def observation_params(
                 "kamis_item_id": kamis_item_ids[item_key],
                 "observed_date": date.fromisoformat(row["observed_date"].strip()),
                 "price": int(row["price"].strip()),
+                "unit_price": parse_decimal(row.get("unit_price")),
                 "scope_name": row["scope_name"].strip(),
                 **{column: row[column].strip() for column in OBSERVATION_KEY_COLUMNS},
             }
@@ -455,6 +456,7 @@ def failed_row(
         "error": str(error),
         **{column: str(row[column]) for column in OBSERVATION_KEY_COLUMNS},
         "price": str(row["price"]),
+        "unit_price": "" if row["unit_price"] is None else str(row["unit_price"]),
     }
 
 
@@ -466,6 +468,7 @@ def write_failed_rows(path: Path, rows: list[dict[str, str]]) -> None:
         "error",
         *OBSERVATION_KEY_COLUMNS,
         "price",
+        "unit_price",
     ]
     with path.open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=columns)
@@ -480,16 +483,19 @@ def upsert_observation_batch(conn: Connection, rows: list[dict[str, Any]]) -> No
           kamis_item_id,
           observed_date,
           price,
+          unit_price,
           scope_name
         )
         VALUES (
           :kamis_item_id,
           :observed_date,
           :price,
+          :unit_price,
           :scope_name
         )
         ON DUPLICATE KEY UPDATE
-          price = VALUES(price)
+          price = VALUES(price),
+          unit_price = VALUES(unit_price)
         """
     )
     conn.execute(stmt, rows)

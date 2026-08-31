@@ -56,6 +56,7 @@ OBSERVATION_REQUIRED_COLUMNS = [
     "contract_month",
     "trade_date",
     "close_price",
+    "unit_price",
 ]
 LOAD_TABLE_ORDER = ["fis_item", "fis_price_observation"]
 
@@ -80,6 +81,7 @@ class FisObservationRow:
     contract_month: str
     trade_date: date
     close_price: Decimal
+    unit_price: Decimal | None
     change_amount: Decimal | None
     change_rate_pct: Decimal | None
     converted_price: Decimal | None
@@ -229,6 +231,7 @@ def read_observation_rows(path: Path, log_path: Path) -> tuple[list[FisObservati
                         contract_month=row["contract_month"].strip(),
                         trade_date=date.fromisoformat(row["trade_date"].strip()),
                         close_price=parse_decimal(row.get("close_price"), required=True),
+                        unit_price=parse_decimal(row.get("unit_price"), required=False),
                         change_amount=parse_decimal(row.get("change_amount"), required=False),
                         change_rate_pct=parse_decimal(row.get("change_rate_pct"), required=False),
                         converted_price=parse_decimal(row.get("converted_price"), required=False),
@@ -332,6 +335,7 @@ def load_observations(
                 "contract_month": row.contract_month,
                 "trade_date": row.trade_date,
                 "close_price": row.close_price,
+                "unit_price": row.unit_price,
                 "change_amount": row.change_amount,
                 "change_rate_pct": row.change_rate_pct,
                 "converted_price": row.converted_price,
