@@ -4,16 +4,18 @@ import argparse
 import csv
 import json
 import re
+import sys
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts" / "collect"))
+
 from collect_kamis import PRODUCTS
 
-
-ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RAW_DIR = ROOT / "data" / "raw" / "kamis"
 DEFAULT_OUTPUT_DIR = ROOT / "data" / "processed" / "kamis"
 DEFAULT_REPORT_DIR = ROOT / "reports" / "transform"

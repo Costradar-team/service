@@ -13,7 +13,7 @@ from typing import Any
 import requests
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 BASE_URL = "https://www.atfis.or.kr/home/commodity.do"
 DEFAULT_OUTPUT_DIR = ROOT / "data" / "raw" / "fis"
 DEFAULT_BEGIN_DATE = "2025-08-01"

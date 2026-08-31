@@ -10,11 +10,11 @@ from pathlib import Path
 from typing import Any
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_RULES_PATH = ROOT / "config" / "profiling_rules.json"
 DEFAULT_MAPPING_PATH = ROOT / "config" / "item_mapping.csv"
 DEFAULT_RAW_DIR = ROOT / "data" / "raw"
-DEFAULT_OUTPUT_DIR = ROOT / "data" / "processed"
+DEFAULT_OUTPUT_DIR = ROOT / "data" / "processed" / "kca"
 DEFAULT_REPORT_DIR = ROOT / "reports" / "transform"
 PROCESSED_FILENAME = "kca_prices_processed.csv"
 UNMAPPED_FILENAME = "unmapped_products.csv"

@@ -12,7 +12,7 @@ import pandas as pd
 from profiling.common import normalized_text, profile_dataframe
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_RULES_PATH = ROOT / "config" / "profiling_rules_fis.json"
 DEFAULT_INPUT_PATH = ROOT / "data" / "raw" / "fis"
 DEFAULT_OUTPUT_PATH = ROOT / "reports" / "profiling" / "profiling_summary_fis.json"

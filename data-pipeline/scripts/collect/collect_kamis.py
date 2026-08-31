@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 BASE_URL = "https://www.kamis.or.kr/service/price/xml.do"
 DEFAULT_RAW_DIR = ROOT / "data" / "raw" / "kamis"
 DEFAULT_ENV_PATH = ROOT.parent / ".env"

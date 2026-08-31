@@ -34,9 +34,9 @@ from sqlalchemy.engine import Connection, Engine, URL
 from sqlalchemy.exc import DBAPIError, IntegrityError, SQLAlchemyError
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 PROJECT_ROOT = ROOT.parent
-DEFAULT_INPUT_PATH = ROOT / "data" / "processed" / "kca_prices_processed.csv"
+DEFAULT_INPUT_PATH = ROOT / "data" / "processed" / "kca" / "kca_prices_processed.csv"
 DEFAULT_REPORT_DIR = ROOT / "reports" / "load"
 DEFAULT_ENV_PATH = PROJECT_ROOT / ".env"
 DEFAULT_BATCH_SIZE = 1000

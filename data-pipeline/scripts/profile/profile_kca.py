@@ -11,7 +11,7 @@ import pandas as pd
 from profiling.common import normalized_text, profile_dataframe
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_RULES_PATH = ROOT / "config" / "profiling_rules.json" #검사 규칙 지정
 DEFAULT_DATA_DIR = ROOT / "data" / "raw"
 

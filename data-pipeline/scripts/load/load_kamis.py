@@ -15,7 +15,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ENV_PATH = ROOT.parent / ".env"
 DEFAULT_ITEM_PATH = ROOT / "data" / "processed" / "kamis" / "kamis_item.csv"
 DEFAULT_OBSERVATION_PATH = (

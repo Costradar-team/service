@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_RULES_PATH = ROOT / "config" / "profiling_rules_fis.json"
 DEFAULT_RAW_DIR = ROOT / "data" / "raw" / "fis"
 DEFAULT_OUTPUT_DIR = ROOT / "data" / "processed" / "fis"

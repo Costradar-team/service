@@ -181,6 +181,7 @@ Ref: store.retailer_id > retailer.retailer_id
 Ref: price_observation.product_id > product.product_id
 Ref: price_observation.store_id > store.store_id
 
+//fis
 Ref: fis_price_observation.fis_item_id > fis_item.fis_item_id
 Ref: fis_item.canonical_item_id > canonical_item.canonical_item_id
 
