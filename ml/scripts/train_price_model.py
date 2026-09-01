@@ -14,6 +14,11 @@ from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, TargetEncoder
 
+try:
+    from .external_market_features import EXTERNAL_FEATURE_COLUMNS
+except ImportError:
+    from external_market_features import EXTERNAL_FEATURE_COLUMNS  # type: ignore[no-redef]
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_INPUT = REPO_ROOT / "artifacts" / "ml" / "model_dataset.csv"
@@ -41,7 +46,7 @@ STORE_GROUP_COLUMNS = [
     "store_name",
     "unit_price_basis",
 ]
-NUMERIC_FEATURES = [
+BASE_NUMERIC_FEATURES = [
     "date_ordinal",
     "month_sin",
     "month_cos",
@@ -52,6 +57,7 @@ NUMERIC_FEATURES = [
     "rolling_mean_4",
     "rolling_std_4",
 ]
+NUMERIC_FEATURES = BASE_NUMERIC_FEATURES + EXTERNAL_FEATURE_COLUMNS
 MEDIAN_TARGET_COLUMN = "median_unit_price"
 STORE_TARGET_COLUMN = "actual_unit_price"
 TRAINING_TARGET_COLUMN = "target_change_ratio"
@@ -139,6 +145,10 @@ def build_supervised_dataset(
     frame = model_dataset.copy()
     frame["survey_date"] = pd.to_datetime(frame["survey_date"], errors="raise")
     frame[target_column] = pd.to_numeric(frame[target_column], errors="raise")
+    for column in EXTERNAL_FEATURE_COLUMNS:
+        if column not in frame.columns:
+            frame[column] = 0.0
+        frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0.0)
     frame = frame.sort_values(group_columns + ["survey_date"]).reset_index(drop=True)
 
     series_sizes = frame.groupby(group_columns, observed=True)[target_column].transform(
@@ -160,6 +170,15 @@ def build_supervised_dataset(
     )
     frame["rolling_std_4"] = grouped.transform(
         lambda series: series.shift(1).rolling(4).std(ddof=0)
+    )
+    previous_dates = frame.groupby(group_columns, observed=True)["survey_date"].shift(1)
+    forecast_gap_days = (frame["survey_date"] - previous_dates).dt.days
+    for column in EXTERNAL_FEATURE_COLUMNS:
+        frame[column] = frame.groupby(group_columns, observed=True)[column].shift(1)
+    frame["external_market_age_days"] = np.where(
+        frame["external_market_available"] > 0,
+        frame["external_market_age_days"] + forecast_gap_days,
+        0.0,
     )
     frame["date_ordinal"] = frame["survey_date"].map(pd.Timestamp.toordinal)
     month_angle = 2 * math.pi * frame["survey_date"].dt.month / 12
@@ -230,8 +249,10 @@ def create_pipeline(
     estimator_name: str,
     random_state: int,
     series_level: str = "subtype",
+    numeric_features: list[str] | None = None,
 ) -> Pipeline:
     categorical_features = group_columns_for(series_level)
+    selected_numeric_features = numeric_features or NUMERIC_FEATURES
     categorical_encoder: Any
     if series_level == "store":
         # Store names are high-cardinality. Cross-fitted target encoding keeps the
@@ -255,7 +276,7 @@ def create_pipeline(
                 categorical_encoder,
                 categorical_features,
             ),
-            ("numeric", "passthrough", NUMERIC_FEATURES),
+            ("numeric", "passthrough", selected_numeric_features),
         ],
         remainder="drop",
     )
@@ -281,7 +302,6 @@ def train_price_model(
 
     group_columns = group_columns_for(series_level)
     target_column = target_column_for(series_level)
-    feature_columns = group_columns + NUMERIC_FEATURES
     raw = pd.read_csv(input_path, encoding="utf-8-sig")
     supervised = build_supervised_dataset(
         raw,
@@ -289,16 +309,44 @@ def train_price_model(
         series_level=series_level,
     )
     train, test, test_dates = split_by_date(supervised, test_fraction)
-    evaluation_pipeline = create_pipeline(estimator_name, random_state, series_level)
-    evaluation_pipeline.fit(train[feature_columns], train[TRAINING_TARGET_COLUMN])
-
-    predicted_change_ratios = evaluation_pipeline.predict(test[feature_columns])
-    model_predictions = test["lag_1"].to_numpy(dtype=float) * (
-        1 + predicted_change_ratios
-    )
     actual = test[target_column].to_numpy(dtype=float)
     previous = test["lag_1"].to_numpy(dtype=float)
     naive_predictions = previous.copy()
+
+    candidate_numeric_features = {"retail_history": BASE_NUMERIC_FEATURES}
+    if supervised["external_market_available"].max() > 0:
+        candidate_numeric_features["retail_history_plus_external_market"] = (
+            NUMERIC_FEATURES
+        )
+    candidate_results: dict[str, dict[str, Any]] = {}
+    for candidate_name, numeric_features in candidate_numeric_features.items():
+        candidate_feature_columns = group_columns + numeric_features
+        candidate_pipeline = create_pipeline(
+            estimator_name,
+            random_state,
+            series_level,
+            numeric_features=numeric_features,
+        )
+        candidate_pipeline.fit(
+            train[candidate_feature_columns],
+            train[TRAINING_TARGET_COLUMN],
+        )
+        candidate_ratios = candidate_pipeline.predict(test[candidate_feature_columns])
+        candidate_predictions = previous * (1 + candidate_ratios)
+        candidate_results[candidate_name] = {
+            "numeric_features": numeric_features,
+            "metrics": calculate_metrics(actual, candidate_predictions, previous),
+            "predictions": candidate_predictions,
+        }
+
+    selected_feature_set = min(
+        candidate_results,
+        key=lambda name: candidate_results[name]["metrics"]["smape_percent"],
+    )
+    selected_result = candidate_results[selected_feature_set]
+    selected_numeric_features = list(selected_result["numeric_features"])
+    feature_columns = group_columns + selected_numeric_features
+    model_predictions = np.asarray(selected_result["predictions"], dtype=float)
 
     metrics = {
         "model": calculate_metrics(actual, model_predictions, previous),
@@ -328,7 +376,12 @@ def train_price_model(
     # Backtesting must only see the historical training partition. After evaluation,
     # fit the persisted production model on every model-ready historical row. New
     # observations can then be scored without fitting the model again.
-    production_pipeline = create_pipeline(estimator_name, random_state, series_level)
+    production_pipeline = create_pipeline(
+        estimator_name,
+        random_state,
+        series_level,
+        numeric_features=selected_numeric_features,
+    )
     production_pipeline.fit(
         supervised[feature_columns],
         supervised[TRAINING_TARGET_COLUMN],
@@ -340,6 +393,7 @@ def train_price_model(
             "series_level": series_level,
             "group_columns": group_columns,
             "feature_columns": feature_columns,
+            "selected_feature_set": selected_feature_set,
             "prediction_target": TRAINING_TARGET_COLUMN,
             "source_target_column": target_column,
             "price_reconstruction": "lag_1 * (1 + predicted_change_ratio)",
@@ -376,6 +430,10 @@ def train_price_model(
         "train_date_max": train["survey_date"].max().date().isoformat(),
         "test_dates": [pd.Timestamp(value).date().isoformat() for value in test_dates],
         "feature_columns": feature_columns,
+        "selected_feature_set": selected_feature_set,
+        "feature_set_backtest": {
+            name: result["metrics"] for name, result in candidate_results.items()
+        },
         "source_target_column": target_column,
         "training_target_column": TRAINING_TARGET_COLUMN,
         "metrics": metrics,
@@ -383,6 +441,7 @@ def train_price_model(
         "limitations": [
             "The dataset has few unique survey dates, so this is an MVP prototype.",
             "Backtesting is chronological and one-step-ahead, not a multi-step production forecast.",
+            "Feature-set selection uses the same small holdout and needs confirmation on future observations.",
             "Predictions must not be presented as reliable short-term forecasts without more frequent data.",
         ],
         "outputs": {

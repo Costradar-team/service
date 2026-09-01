@@ -10,6 +10,11 @@ import joblib
 import numpy as np
 import pandas as pd
 
+try:
+    from .external_market_features import EXTERNAL_FEATURE_COLUMNS
+except ImportError:
+    from external_market_features import EXTERNAL_FEATURE_COLUMNS  # type: ignore[no-redef]
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_INPUT = REPO_ROOT / "artifacts" / "ml" / "model_dataset.csv"
 DEFAULT_MODEL = REPO_ROOT / "artifacts" / "ml" / "model" / "price_model.joblib"
@@ -100,6 +105,10 @@ def build_future_features(
     frame = raw_model_dataset.copy()
     frame["survey_date"] = pd.to_datetime(frame["survey_date"], errors="raise")
     frame[target_column] = pd.to_numeric(frame[target_column], errors="raise")
+    for column in EXTERNAL_FEATURE_COLUMNS:
+        if column not in frame.columns:
+            frame[column] = 0.0
+        frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0.0)
     rows = []
 
     for key, group in frame.groupby(group_columns, observed=True):
@@ -117,6 +126,7 @@ def build_future_features(
         forecast_date = dates[-1] + pd.Timedelta(days=next_interval_days)
         month_angle = 2 * math.pi * forecast_date.month / 12
         row = dict(zip(group_columns, key))
+        latest = group.iloc[-1]
         row.update(
             {
                 "forecast_date": forecast_date,
@@ -133,6 +143,11 @@ def build_future_features(
                 "rolling_std_4": float(np.std(prices[-4:])),
             }
         )
+        row.update(
+            {column: float(latest[column]) for column in EXTERNAL_FEATURE_COLUMNS}
+        )
+        if row["external_market_available"] > 0:
+            row["external_market_age_days"] += next_interval_days
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -257,7 +272,7 @@ def predict_prices(
         output_frames.append(step_output)
 
         predicted_history_rows = future[
-            ["forecast_date", *group_columns]
+            ["forecast_date", *group_columns, *EXTERNAL_FEATURE_COLUMNS]
         ].rename(columns={"forecast_date": "survey_date"})
         predicted_history_rows[target_column] = model_predictions
         working_history = pd.concat(

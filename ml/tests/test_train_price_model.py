@@ -41,6 +41,25 @@ class TrainPriceModelTest(unittest.TestCase):
         self.assertEqual(first["lag_1"], 2030)
         self.assertEqual(first["lag_4"], 2000)
         self.assertEqual(first["rolling_mean_4"], 2015)
+        self.assertEqual(first["external_market_available"], 0)
+        self.assertEqual(first["external_market_age_days"], 0)
+
+    def test_external_features_are_frozen_at_the_previous_survey_date(self) -> None:
+        frame = self.frame.copy()
+        frame["external_market_price"] = (
+            frame.groupby(["canonical_item", "subtype"]).cumcount() + 100
+        )
+        frame["external_market_available"] = 1
+        frame["external_market_age_days"] = 2
+
+        supervised = build_supervised_dataset(frame, minimum_series_points=6)
+        row = supervised.loc[
+            (supervised["canonical_item"] == "밀가루")
+            & (supervised["survey_date"] == pd.Timestamp("2026-02-26"))
+        ].iloc[0]
+
+        self.assertEqual(row["external_market_price"], 103)
+        self.assertEqual(row["external_market_age_days"], 16)
 
     def test_chronological_split_keeps_latest_dates_for_test(self) -> None:
         supervised = build_supervised_dataset(

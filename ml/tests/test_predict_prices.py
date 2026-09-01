@@ -64,6 +64,10 @@ class PredictPricesTest(unittest.TestCase):
             self.build_dataset(input_path)
 
             training_report = train_price_model(input_path, model_dir)
+            self.assertEqual(
+                training_report["selected_feature_set"],
+                "retail_history",
+            )
             model_modified_at = (model_dir / "price_model.joblib").stat().st_mtime_ns
             prediction_report = predict_prices(
                 input_path,

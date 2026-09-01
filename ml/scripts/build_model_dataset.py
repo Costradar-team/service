@@ -10,6 +10,19 @@ from pathlib import Path
 from statistics import median
 from typing import Any
 
+try:
+    from .external_market_features import (
+        EXTERNAL_FEATURE_COLUMNS,
+        enrich_rows_with_external_market,
+        load_external_market_series,
+    )
+except ImportError:
+    from external_market_features import (  # type: ignore[no-redef]
+        EXTERNAL_FEATURE_COLUMNS,
+        enrich_rows_with_external_market,
+        load_external_market_series,
+    )
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_INPUT = (
@@ -88,7 +101,7 @@ MODEL_COLUMNS = [
     "min_unit_price",
     "median_unit_price",
     "max_unit_price",
-]
+] + EXTERNAL_FEATURE_COLUMNS
 
 PRODUCT_MODEL_COLUMNS = [
     "survey_date",
@@ -101,7 +114,7 @@ PRODUCT_MODEL_COLUMNS = [
     "min_unit_price",
     "median_unit_price",
     "max_unit_price",
-]
+] + EXTERNAL_FEATURE_COLUMNS
 
 BRAND_MODEL_COLUMNS = [
     "survey_date",
@@ -115,7 +128,7 @@ BRAND_MODEL_COLUMNS = [
     "min_unit_price",
     "median_unit_price",
     "max_unit_price",
-]
+] + EXTERNAL_FEATURE_COLUMNS
 
 STORE_MODEL_COLUMNS = [
     "survey_date",
@@ -127,7 +140,7 @@ STORE_MODEL_COLUMNS = [
     "unit_price_basis",
     "observation_count",
     "actual_unit_price",
-]
+] + EXTERNAL_FEATURE_COLUMNS
 
 REJECTED_COLUMNS = [
     "상품명",
@@ -226,6 +239,8 @@ def normalize_unit_price(
 def build_model_dataset(
     input_path: Path,
     output_dir: Path,
+    fis_dir: Path | None = None,
+    kamis_dir: Path | None = None,
 ) -> dict[str, Any]:
     if not input_path.is_file():
         raise FileNotFoundError(f"Processed input CSV not found: {input_path}")
@@ -244,6 +259,11 @@ def build_model_dataset(
     store_model_path = store_output_dir / MODEL_DATASET_FILENAME
     rejected_path = output_dir / REJECTED_FILENAME
     summary_path = output_dir / SUMMARY_FILENAME
+    external_series, external_summary = load_external_market_series(
+        fis_dir,
+        kamis_dir,
+    )
+    external_enriched_counts: dict[str, int] = {}
 
     aggregates: dict[
         tuple[str, str, str, str],
@@ -434,6 +454,10 @@ def build_model_dataset(
             }
         )
 
+    external_enriched_counts["subtype"] = enrich_rows_with_external_market(
+        model_rows,
+        external_series,
+    )
     with model_path.open("w", encoding="utf-8-sig", newline="") as model_file:
         writer = csv.DictWriter(model_file, fieldnames=MODEL_COLUMNS)
         writer.writeheader()
@@ -463,6 +487,10 @@ def build_model_dataset(
             }
         )
 
+    external_enriched_counts["product"] = enrich_rows_with_external_market(
+        product_model_rows,
+        external_series,
+    )
     with product_model_path.open(
         "w", encoding="utf-8-sig", newline=""
     ) as product_model_file:
@@ -499,6 +527,10 @@ def build_model_dataset(
             }
         )
 
+    external_enriched_counts["brand"] = enrich_rows_with_external_market(
+        brand_model_rows,
+        external_series,
+    )
     with brand_model_path.open(
         "w", encoding="utf-8-sig", newline=""
     ) as brand_model_file:
@@ -536,6 +568,10 @@ def build_model_dataset(
             }
         )
 
+    external_enriched_counts["store"] = enrich_rows_with_external_market(
+        store_model_rows,
+        external_series,
+    )
     with store_model_path.open(
         "w", encoding="utf-8-sig", newline=""
     ) as store_model_file:
@@ -600,6 +636,8 @@ def build_model_dataset(
         "canonical_item_unique_date_counts": {
             item: len(dates) for item, dates in sorted(item_dates.items())
         },
+        "external_market": external_summary
+        | {"enriched_row_counts": external_enriched_counts},
         "outputs": {
             "normalized_prices": str(normalized_path),
             "model_dataset": str(model_path),
@@ -634,11 +672,21 @@ def main() -> int:
         default=str(DEFAULT_OUTPUT_DIR),
         help="Directory for normalized and model-ready outputs.",
     )
+    parser.add_argument(
+        "--fis-dir",
+        help="Optional directory containing processed FIS CSVs.",
+    )
+    parser.add_argument(
+        "--kamis-dir",
+        help="Optional directory containing processed KAMIS CSVs.",
+    )
     args = parser.parse_args()
 
     summary = build_model_dataset(
         resolve_cli_path(args.input),
         resolve_cli_path(args.output_dir),
+        fis_dir=resolve_cli_path(args.fis_dir) if args.fis_dir else None,
+        kamis_dir=resolve_cli_path(args.kamis_dir) if args.kamis_dir else None,
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0

@@ -14,7 +14,11 @@ $env:PYTHONUTF8 = "1"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 $RepoRoot = $PSScriptRoot
-$RawData = Join-Path $RepoRoot "data-pipeline\data\raw"
+$RawDataRoot = Join-Path $RepoRoot "data-pipeline\data\raw"
+$KcaRawData = Join-Path $RawDataRoot "kca"
+if (-not (Test-Path -LiteralPath $KcaRawData)) {
+    $KcaRawData = $RawDataRoot
+}
 $ArtifactRoot = Join-Path $RepoRoot "artifacts"
 $QualityDir = Join-Path $ArtifactRoot "data-quality"
 $ProcessedDir = Join-Path $ArtifactRoot "processed"
@@ -23,17 +27,19 @@ $MlDir = Join-Path $ArtifactRoot "ml"
 $ProductMlDir = Join-Path $MlDir "product"
 $BrandMlDir = Join-Path $MlDir "brand"
 $StoreMlDir = Join-Path $MlDir "store"
+$FisProcessedDir = Join-Path $RepoRoot "data-pipeline\data\processed\fis"
+$KamisProcessedDir = Join-Path $RepoRoot "data-pipeline\data\processed\kamis"
 
-if (-not (Test-Path -LiteralPath $RawData)) {
-    throw "Raw data directory not found: $RawData"
+if (-not (Test-Path -LiteralPath $KcaRawData)) {
+    throw "KCA raw data directory not found: $KcaRawData"
 }
 
 $RawCsvCount = @(
-    Get-ChildItem -LiteralPath $RawData -File |
+    Get-ChildItem -LiteralPath $KcaRawData -File |
         Where-Object { $_.Extension -ieq ".csv" }
 ).Count
 if ($RawCsvCount -eq 0) {
-    throw "No raw CSV files found in: $RawData"
+    throw "No KCA raw CSV files found in: $KcaRawData"
 }
 
 New-Item -ItemType Directory -Force $QualityDir, $ProcessedDir, $TransformReportDir, $MlDir, $ProductMlDir, $BrandMlDir, $StoreMlDir | Out-Null
@@ -53,8 +59,8 @@ function Invoke-PythonStep {
 
 if (-not $SkipProfiling) {
     Invoke-PythonStep "1/7 Data profiling" @(
-        (Join-Path $RepoRoot "data-pipeline\scripts\profile_kca.py"),
-        $RawData,
+        (Join-Path $RepoRoot "data-pipeline\scripts\profile\profile_kca.py"),
+        $KcaRawData,
         "--output", (Join-Path $QualityDir "profiling_summary.json")
     )
 }
@@ -63,17 +69,30 @@ else {
 }
 
 Invoke-PythonStep "2/7 Data transform" @(
-    (Join-Path $RepoRoot "data-pipeline\scripts\transform_kca.py"),
-    $RawData,
+    (Join-Path $RepoRoot "data-pipeline\scripts\transform\transform_kca.py"),
+    $KcaRawData,
     "--output-dir", $ProcessedDir,
     "--report-dir", $TransformReportDir
 )
 
-Invoke-PythonStep "3/7 Unit-price normalization and four-level dataset build" @(
+$BuildDatasetArguments = @(
     (Join-Path $RepoRoot "ml\scripts\build_model_dataset.py"),
     "--input", (Join-Path $ProcessedDir "kca_prices_processed.csv"),
     "--output-dir", $MlDir
 )
+if (
+    (Test-Path -LiteralPath (Join-Path $FisProcessedDir "fis_item.csv")) -and
+    (Test-Path -LiteralPath (Join-Path $FisProcessedDir "fis_price_observation.csv"))
+) {
+    $BuildDatasetArguments += @("--fis-dir", $FisProcessedDir)
+}
+if (
+    (Test-Path -LiteralPath (Join-Path $KamisProcessedDir "kamis_item.csv")) -and
+    (Test-Path -LiteralPath (Join-Path $KamisProcessedDir "kamis_price_observation.csv"))
+) {
+    $BuildDatasetArguments += @("--kamis-dir", $KamisProcessedDir)
+}
+Invoke-PythonStep "3/7 Unit-price normalization and external-feature dataset build" $BuildDatasetArguments
 
 Invoke-PythonStep "4/7 Subtype baseline evaluation" @(
     (Join-Path $RepoRoot "ml\scripts\evaluate_baselines.py"),

@@ -7,7 +7,8 @@
 버터, 계란, 우유를 선별합니다. 로컬 실행 파이프라인은 원천 데이터 품질 검사,
 품목 매핑, 단위가격 표준화, 날짜별 대표가격 생성, 기준 모델 평가를 순서대로
 수행합니다. 예측 결과는 세부유형, 개별 상품명, 브랜드, 지점 실제가격의 네 가지
-단위로 생성합니다.
+단위로 생성합니다. FIS의 밀·설탕 선물과 KAMIS의 계란·우유 가격이 준비되어
+있으면 조사일 당시 공개된 값만 외부시장 특성으로 결합합니다.
 
 데이터 출처, 모델 입력, 성능 해석과 백엔드 JSON 계약은
 [ML 가격예측 파이프라인 문서](docs/ml-price-forecasting.md)에 정리되어 있습니다.
@@ -36,6 +37,10 @@
   학습하여 데이터가 적은 지점도 다른 지점의 공통 패턴을 활용합니다.
 - `ForecastHorizon`을 사용하면 여러 미래 조사 시점을 연속으로 예측합니다.
   2단계부터는 직전 단계의 ML 예측값을 다음 단계 입력으로 사용합니다.
+- FIS는 밀가루·설탕, KAMIS는 계란·우유에 연결합니다. 계란 10구와 30구는
+  `KRW/10ea`로 환산하며 미래 관측값이 과거 학습 행에 섞이지 않게 합니다.
+- 학습할 때 소매가격 이력 모델과 외부시장 특성을 추가한 모델을 같은 시간 구간에서
+  비교하고, sMAPE가 더 낮은 특성 구성을 예측 단위별로 자동 저장합니다.
 - 백엔드 전달용 JSON은 세부유형, 상품명, 브랜드, 지점의 네 종류로 생성합니다.
 
 현재 데이터에서는 상품·지점 시계열 9,615개 중 실제가격이 최소 6회 이상 있는
@@ -91,6 +96,10 @@ python -m pip install -r requirements-lightgbm.txt
 시간순 백테스트에서 학습 모델을 직전 가격 기준선과 비교하지만, 기준선은 성능
 평가에만 사용하고 예측 산출물에는 넣지 않습니다. 학습 후에는 전체 과거 데이터로
 운영용 모델을 다시 적합하여 `price_model.joblib`에 저장합니다.
+
+GitHub에 포함된 `data-pipeline/data/processed/fis/`와
+`data-pipeline/data/processed/kamis/` 정제 CSV를 `run_local.ps1`이 자동으로 읽어
+외부시장 특성을 포함합니다. 파일이 없는 환경에서는 소매가격 이력만으로도 실행됩니다.
 
 새 원천 CSV를 추가한 뒤에는 `-TrainModel`을 사용하지 않습니다. 전처리와 최신
 특징값 계산만 다시 수행하고 저장된 모델을 불러와 예측합니다.
@@ -176,16 +185,18 @@ artifacts/
 ### 개별 실행
 
 ```powershell
-python data-pipeline\scripts\profile_kca.py data-pipeline\data\raw `
+python data-pipeline\scripts\profile\profile_kca.py data-pipeline\data\raw\kca `
   --output artifacts\data-quality\profiling_summary.json
 
-python data-pipeline\scripts\transform_kca.py data-pipeline\data\raw `
+python data-pipeline\scripts\transform\transform_kca.py data-pipeline\data\raw\kca `
   --output-dir artifacts\processed `
   --report-dir artifacts\data-quality\transform
 
 python ml\scripts\build_model_dataset.py `
   --input artifacts\processed\kca_prices_processed.csv `
-  --output-dir artifacts\ml
+  --output-dir artifacts\ml `
+  --fis-dir data-pipeline\data\processed\fis `
+  --kamis-dir data-pipeline\data\processed\kamis
 
 python ml\scripts\evaluate_baselines.py `
   --input artifacts\ml\model_dataset.csv `
@@ -275,6 +286,11 @@ docker compose up -d mysql
 - 지점 466개를 구분하며 최소 6회 이상 관측된 상품·지점 시계열 9,083개를
   직접예측합니다.
 - 계란은 13개 조사일만 존재해 단기 예측 모델을 주장하기에는 부족합니다.
+- 현재 시간순 검증에서는 외부시장 특성이 지점 모델에서만 sMAPE를
+  `1.5455%`에서 `1.4694%`로 낮춰 채택됐습니다. 세부유형·상품·브랜드 모델은
+  소매가격 이력만 사용하도록 자동 선택됐습니다.
+- FIS·KAMIS 검증 데이터의 마지막 날짜는 2026-07-31이므로 운영 전 최신 수집이
+  필요합니다.
 - 기준 모델 평가는 파이프라인 검증용이며 서비스용 최종 예측 모델이 아닙니다.
 - 백엔드 애플리케이션은 아직 비어 있지만 전달용 JSON 계약과 내보내기는 준비했습니다.
 - 3단계 지점 예측 JSON은 약 18MB이므로 실제 API는 상품·브랜드·단계별 필터와
