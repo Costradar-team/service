@@ -16,6 +16,7 @@ services:
       - --collation-server=utf8mb4_0900_ai_ci
     volumes:
       - mysql_data:/var/lib/mysql
+      - ./backend/sql:/docker-entrypoint-initdb.d:ro
 
 volumes:
   mysql_data:
