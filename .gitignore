@@ -217,9 +217,6 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Generated KCA processed outputs
-data-pipeline/data/processed/
-
 # Generated data pipeline reports
 data-pipeline/reports/*
 
