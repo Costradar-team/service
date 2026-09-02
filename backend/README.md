@@ -1,6 +1,8 @@
 # backend
 
-KCA 1차 FastAPI. 시세는 Docker MySQL `unit_price` 조회. KAMIS·FIS 테이블은 적재용이며 이 API는 쓰지 않는다.
+KCA 1차 FastAPI. 시세는 Docker MySQL `unit_price` 조회. 발주는 Notion 9/2 기준: 농협·이마트·롯데 브랜드 안에서 조합 TOP 3. 온라인 가정. 지점 분산 없음.
+
+예측 2주는 `data/brand_forecasts.json` (대원 PR #9 zip). store JSON은 넣지 않는다.
 
 JWT, 저장 리스트, 지역 필터는 만들지 않는다.
 
@@ -30,9 +32,23 @@ uvicorn main:app --reload --port 8000
 | `GET /signals` | 품목별 BUY / WAIT / HOLD |
 | `GET /prices/history?item_name=밀가루` | 브랜드 평균 시계열 (`retailer.name`) |
 | `GET /prices/history?item_name=밀가루&brand=이마트` | 지점 표 + 최저/평균/최고 |
-| `POST /predict` | 향후 가격 (숫자는 목, 현재가는 DB) |
-| `POST /orders/quote` | 최근 조사일 평균 단가 발주 금액 |
-| `POST /optimize/basket` | 품목별 최저 지점 조합 + 절감액 |
+| `POST /predict` | 2주 예측. 현재가는 DB, 예측은 brand JSON `modelPredictedUnitPrice` |
+| `POST /orders/quote` | 최근 조사일 전체 평균 단가 발주 금액 (기준선) |
+| `POST /optimize/basket` | 농협·이마트·롯데 조합 합계 TOP 3. `mode=today` 또는 `forecast` |
 
 `grain` 은 `brand` 또는 `store`. 지역 쿼리는 없다. 비교는 `unit_price`.
-`롯데마트` → `롯데슈퍼`, `GS` → `GS더프레시`.
+화면 브랜드: 농협·이마트·롯데. DB는 `(주)농협유통`/`(주)농협하나로유통`, `이마트`, `롯데슈퍼`. JSON은 `농협하나로마트`, `이마트`, `롯데마트·슈퍼`.
+
+장바구니 예:
+
+```json
+{
+  "mode": "today",
+  "items": [
+    {"item_name": "밀가루", "quantity": 10},
+    {"item_name": "버터", "quantity": 2}
+  ]
+}
+```
+
+`mode`를 `forecast`로 두면 2주 예측가로 같은 TOP 3를 계산한다.

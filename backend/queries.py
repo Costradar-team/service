@@ -4,14 +4,22 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from db import fetch_all, fetch_one
+from forecasts import BASKET_BRANDS, brand_spec, predicted_unit_price
 
 DISCLAIMER = "공개 시세 기준 참고용이며 실시간 마트 가격이 아닙니다."
-BASKET_DISCLAIMER = "공개 시세 기준 참고용이며 배송비·거리는 반영하지 않았습니다."
+BASKET_DISCLAIMER = (
+    "공개 시세 기준 참고용이며 실시간 마트 가격이 아닙니다. "
+    "온라인 가정. 농협·이마트·롯데 브랜드 안에서만 조합하며 지점을 나누지 않습니다."
+)
 
 # 화면에서 쓰던 이름 → retailer.name
 BRAND_ALIASES = {
     "롯데마트": "롯데슈퍼",
+    "롯데마트·슈퍼": "롯데슈퍼",
+    "롯데": "롯데슈퍼",
     "GS": "GS더프레시",
+    "농협": "(주)농협하나로유통",
+    "농협하나로마트": "(주)농협하나로유통",
 }
 
 SIGNAL_MESSAGES = {
@@ -26,8 +34,17 @@ FROM canonical_item c
 ORDER BY c.name
 """
 
-ITEM_MEAN_SQL = """
-SELECT po.survey_date, AVG(po.unit_price) AS avg_price
+# g/ml 는 kg/L, 개는 10개당. 대원 JSON(KRW/kg, KRW/L, KRW/10ea)과 맞춤.
+UNIT_PRICE_SQL = """
+CASE
+  WHEN p.unit IN ('g', 'ml') THEN po.unit_price * 1000
+  WHEN p.unit = '개' THEN po.unit_price * 10
+  ELSE po.unit_price
+END
+"""
+
+ITEM_MEAN_SQL = f"""
+SELECT po.survey_date, AVG({UNIT_PRICE_SQL}) AS avg_price
 FROM price_observation po
 JOIN product p ON p.product_id = po.product_id
 JOIN item_subtype s ON s.subtype_id = p.subtype_id
@@ -37,8 +54,8 @@ GROUP BY po.survey_date
 ORDER BY po.survey_date
 """
 
-BRAND_MEAN_SQL = """
-SELECT r.name AS brand, po.survey_date, AVG(po.unit_price) AS avg_price
+BRAND_MEAN_SQL = f"""
+SELECT r.name AS brand, po.survey_date, AVG({UNIT_PRICE_SQL}) AS avg_price
 FROM price_observation po
 JOIN product p ON p.product_id = po.product_id
 JOIN item_subtype s ON s.subtype_id = p.subtype_id
@@ -50,8 +67,8 @@ GROUP BY r.name, po.survey_date
 ORDER BY r.name, po.survey_date
 """
 
-STORE_MEAN_SQL = """
-SELECT st.name AS store_name, po.survey_date, AVG(po.unit_price) AS avg_price
+STORE_MEAN_SQL = f"""
+SELECT st.name AS store_name, po.survey_date, AVG({UNIT_PRICE_SQL}) AS avg_price
 FROM price_observation po
 JOIN product p ON p.product_id = po.product_id
 JOIN item_subtype s ON s.subtype_id = p.subtype_id
@@ -63,8 +80,8 @@ GROUP BY st.store_id, st.name, po.survey_date
 ORDER BY st.name, po.survey_date
 """
 
-LATEST_STORE_SQL = """
-SELECT st.name AS store_name, AVG(po.unit_price) AS avg_price
+LATEST_STORE_SQL = f"""
+SELECT st.name AS store_name, AVG({UNIT_PRICE_SQL}) AS avg_price
 FROM price_observation po
 JOIN product p ON p.product_id = po.product_id
 JOIN item_subtype s ON s.subtype_id = p.subtype_id
@@ -109,6 +126,11 @@ def resolve_brand(brand: str, known: list[str]) -> str | None:
     wanted = BRAND_ALIASES.get(brand, brand)
     if wanted in known:
         return wanted
+    spec = brand_spec(brand)
+    if spec:
+        for name in spec["db_names"]:
+            if name in known:
+                return name
     return None
 
 
@@ -277,6 +299,93 @@ def cheapest_store(item_name: str, survey_date: str) -> dict | None:
     if not row:
         return None
     return {"store_name": row["store_name"], "unit_price": _money(row["avg_price"])}
+
+
+def latest_brand_group_price(item_name: str, db_names: tuple[str, ...]) -> tuple[str, int] | None:
+    placeholders = ", ".join(f":b{i}" for i in range(len(db_names)))
+    params = {f"b{i}": name for i, name in enumerate(db_names)}
+    params["item_name"] = item_name
+    row = fetch_one(
+        f"""
+        SELECT po.survey_date, AVG({UNIT_PRICE_SQL}) AS avg_price
+        FROM price_observation po
+        JOIN product p ON p.product_id = po.product_id
+        JOIN item_subtype s ON s.subtype_id = p.subtype_id
+        JOIN canonical_item c ON c.canonical_item_id = s.canonical_item_id
+        JOIN store st ON st.store_id = po.store_id
+        JOIN retailer r ON r.retailer_id = st.retailer_id
+        WHERE c.name = :item_name AND r.name IN ({placeholders})
+        GROUP BY po.survey_date
+        ORDER BY po.survey_date DESC
+        LIMIT 1
+        """,
+        params,
+    )
+    if row is None or row["avg_price"] is None:
+        return None
+    return _iso(row["survey_date"]), _money(row["avg_price"])
+
+
+def brand_basket(
+    items: list[dict],
+    mode: str = "today",
+) -> dict:
+    """농협·이마트·롯데 각 브랜드에서 조합 총액. 지점 분산 없음."""
+    ranked = []
+    as_of = None
+    forecast_date = None
+    for spec in BASKET_BRANDS:
+        lines = []
+        total = 0
+        complete = True
+        brand_date = None
+        for item in items:
+            name = item["item_name"]
+            qty = item["quantity"]
+            if mode == "forecast":
+                predicted = predicted_unit_price(name, brand=spec["display"])
+                if predicted is None:
+                    complete = False
+                    break
+                unit_price = predicted["unit_price"]
+                brand_date = predicted["as_of_date"]
+                forecast_date = predicted["forecast_date"]
+            else:
+                latest = latest_brand_group_price(name, spec["db_names"])
+                if latest is None:
+                    complete = False
+                    break
+                brand_date, unit_price = latest
+            amount = round(unit_price * qty)
+            total += amount
+            lines.append(
+                {
+                    "item_name": name,
+                    "quantity": qty,
+                    "unit_price": unit_price,
+                    "amount": amount,
+                }
+            )
+        if not complete or not lines:
+            continue
+        as_of = brand_date
+        ranked.append(
+            {
+                "brand": spec["display"],
+                "total": total,
+                "items": lines,
+            }
+        )
+    ranked.sort(key=lambda row: (row["total"], row["brand"]))
+    for index, row in enumerate(ranked, start=1):
+        row["rank"] = index
+    return {
+        "mode": mode,
+        "as_of_date": as_of,
+        "forecast_date": forecast_date if mode == "forecast" else None,
+        "forecast_horizon_step": 1 if mode == "forecast" else None,
+        "brands": ranked[:3],
+    }
 
 
 def brand_names_for_item(item_name: str) -> list[str]:

@@ -1,17 +1,18 @@
-from collections import defaultdict
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from db import ping
+from forecasts import FORECAST_PATH, predicted_unit_price
 from queries import (
     BASKET_DISCLAIMER,
     DISCLAIMER,
+    brand_basket,
     brand_history,
     brand_names_for_item,
     build_signals,
-    cheapest_store,
     latest_unit_price,
     list_items,
     resolve_brand,
@@ -20,8 +21,8 @@ from queries import (
 
 app = FastAPI(
     title="CostRadar API",
-    description="KCA 1차. 시세는 공개 참고용이며 실시간 마트 가격이 아닙니다.",
-    version="0.2.0",
+    description="KCA 1차. 발주는 농협·이마트·롯데 브랜드 안 조합 TOP 3. 시세는 공개 참고용입니다.",
+    version="0.3.0",
 )
 
 app.add_middleware(
@@ -48,6 +49,7 @@ class QuoteItem(BaseModel):
 class QuoteRequest(BaseModel):
     items: list[QuoteItem]
     unit: str | None = None
+    mode: Literal["today", "forecast"] = "today"
 
 
 class PredictRequest(BaseModel):
@@ -74,6 +76,7 @@ def health() -> dict:
         "status": "ok" if db_ok else "degraded",
         "source": "kca",
         "db": "ok" if db_ok else "error",
+        "forecast": "ok" if FORECAST_PATH.is_file() else "missing",
     }
 
 
@@ -104,6 +107,25 @@ def prices_history(
     return payload
 
 
+def signal_from_forecast(current: int, predicted: int) -> tuple[str, str, float]:
+    if current <= 0:
+        return "HOLD", "큰 변동은 없습니다. 필요할 때 사도 무방합니다.", 0.4
+    change = (predicted - current) / current
+    if change >= 0.03:
+        return (
+            "BUY",
+            "2주 뒤 가격이 오를 것으로 보입니다. 이번 조사일 기준으로 사두면 유리합니다.",
+            0.35,
+        )
+    if change <= -0.03:
+        return (
+            "WAIT",
+            "2주 뒤 가격이 내릴 것으로 보입니다. 급할 필요 없습니다.",
+            0.65,
+        )
+    return "HOLD", "큰 변동은 없습니다. 필요할 때 사도 무방합니다.", 0.4
+
+
 @app.post("/predict")
 def predict(body: PredictRequest) -> dict:
     require_item(body.item_name)
@@ -111,27 +133,27 @@ def predict(body: PredictRequest) -> dict:
     if latest is None:
         error(404, "NO_PRICE", f"시세가 없습니다: {body.item_name}")
     survey_date, current = latest
-    signal_row = next(
-        (row for row in build_signals()["items"] if row["item_name"] == body.item_name),
-        None,
-    )
-    signal = signal_row["signal"] if signal_row else "HOLD"
-    message = signal_row["message"] if signal_row else ""
-    drop = signal_row["drop_probability"] if signal_row else 0.4
-    predicted = round(current * (0.97 if signal == "BUY" else 1.01))
+    forecast = predicted_unit_price(body.item_name, brand=body.brand)
+    if forecast is None:
+        error(404, "NO_FORECAST", f"예측값이 없습니다: {body.item_name}")
+    predicted = forecast["unit_price"]
+    signal, message, drop = signal_from_forecast(current, predicted)
     return {
         "item_name": body.item_name,
-        "brand": body.brand,
+        "brand": forecast["brand"] or body.brand,
         "store_name": body.store_name,
         "survey_date": survey_date,
+        "as_of_date": forecast["as_of_date"],
+        "forecast_date": forecast["forecast_date"],
         "current_price": current,
         "predicted_price_2weeks": predicted,
-        "pred_low": predicted - 300,
-        "pred_high": predicted + 250,
+        "pred_low": forecast["pred_low"],
+        "pred_high": forecast["pred_high"],
         "drop_probability": drop,
         "signal": signal,
         "message": message,
         "disclaimer": DISCLAIMER,
+        "source": forecast["source"],
     }
 
 
@@ -169,36 +191,30 @@ def quote(body: QuoteRequest) -> dict:
 
 @app.post("/optimize/basket")
 def optimize_basket(body: QuoteRequest) -> dict:
-    baseline = quote(body)
-    grouped: dict[str, list] = defaultdict(list)
-    optimized_total = 0
+    if not body.items:
+        error(400, "EMPTY_ITEMS", "품목이 없습니다.")
     for item in body.items:
-        latest = latest_unit_price(item.item_name)
-        if latest is None:
-            error(404, "NO_PRICE", f"시세가 없습니다: {item.item_name}")
-        item_date, _current = latest
-        cheapest = cheapest_store(item.item_name, item_date)
-        if cheapest is None:
-            error(404, "NO_PRICE", f"시세가 없습니다: {item.item_name}")
-        amount = round(cheapest["unit_price"] * item.quantity)
-        optimized_total += amount
-        grouped[cheapest["store_name"]].append(
-            {
-                "item_name": item.item_name,
-                "quantity": item.quantity,
-                "unit_price": cheapest["unit_price"],
-                "amount": amount,
-            }
-        )
-    savings = baseline["total"] - optimized_total
-    stores = [{"store_name": name, "items": items} for name, items in grouped.items()]
+        require_item(item.item_name)
+    payload = brand_basket(
+        [{"item_name": item.item_name, "quantity": item.quantity} for item in body.items],
+        mode=body.mode,
+    )
+    if not payload["brands"]:
+        error(404, "NO_PRICE", "선택한 품목 조합을 채울 브랜드 시세가 없습니다.")
+    baseline = quote(body)
+    cheapest = payload["brands"][0]["total"]
+    savings = baseline["total"] - cheapest
     percent = round(savings / baseline["total"] * 100, 1) if baseline["total"] else 0
     return {
         "disclaimer": BASKET_DISCLAIMER,
+        "mode": payload["mode"],
         "survey_date": baseline["survey_date"],
+        "as_of_date": payload["as_of_date"],
+        "forecast_date": payload["forecast_date"],
+        "forecast_horizon_step": payload["forecast_horizon_step"],
         "baseline_total": baseline["total"],
-        "optimized_total": optimized_total,
+        "optimized_total": cheapest,
         "savings": savings,
         "savings_percent": percent,
-        "stores": stores,
+        "brands": payload["brands"],
     }
