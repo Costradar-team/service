@@ -26,6 +26,7 @@ from sqlalchemy import (
     Table,
     UniqueConstraint,
     create_engine,
+    or_,
     select,
     tuple_,
 )
@@ -40,6 +41,7 @@ DEFAULT_INPUT_PATH = ROOT / "data" / "processed" / "kca" / "kca_prices_processed
 DEFAULT_REPORT_DIR = ROOT / "reports" / "load"
 DEFAULT_ENV_PATH = PROJECT_ROOT / ".env"
 DEFAULT_BATCH_SIZE = 1000
+CSV_ENCODING = "utf-8-sig"
 
 REQUIRED_COLUMNS = [
     "상품명",
@@ -60,6 +62,7 @@ PARENT_TABLE_ORDER = [
     "manufacturer",
     "product",
     "retailer",
+    "region",
     "store",
 ]
 LOAD_TABLE_ORDER = PARENT_TABLE_ORDER + ["price_observation"]
@@ -112,6 +115,16 @@ retailer = Table(
     Column("name", String(255), nullable=False, unique=True),
 )
 
+region = Table(
+    "region",
+    metadata,
+    Column("region_id", BigInteger, primary_key=True, autoincrement=True),
+    Column("parent_region_id", BigInteger, ForeignKey("region.region_id")),
+    Column("name", String(50), nullable=False),
+    Column("region_type", String(20), nullable=False),
+    UniqueConstraint("parent_region_id", "name", name="uq_region_parent_name"),
+)
+
 store = Table(
     "store",
     metadata,
@@ -119,6 +132,11 @@ store = Table(
     Column("retailer_id", BigInteger, ForeignKey("retailer.retailer_id"), nullable=False),
     Column("name", String(255), nullable=False),
     Column("source_store_name", String(255), nullable=False, unique=True),
+    Column("store_type", String(20), nullable=False),
+    Column("store_status", String(20), nullable=False),
+    Column("match_status", String(20), nullable=False),
+    Column("validation_status", String(20), nullable=False),
+    Column("region_id", BigInteger, ForeignKey("region.region_id")),
     UniqueConstraint("retailer_id", "name", name="uq_store_retailer_name"),
 )
 
@@ -173,6 +191,51 @@ fis_price_observation = Table(
         "contract_month",
         "trade_date",
         name="uq_fis_price_item_contract_trade_date",
+    ),
+)
+
+kamis_item = Table(
+    "kamis_item",
+    metadata,
+    Column("kamis_item_id", BigInteger, primary_key=True, autoincrement=True),
+    Column(
+        "canonical_item_id",
+        BigInteger,
+        ForeignKey("canonical_item.canonical_item_id"),
+        nullable=False,
+    ),
+    Column("item_category_code", String(10), nullable=False),
+    Column("item_code", String(20), nullable=False),
+    Column("item_name", String(100), nullable=False),
+    Column("kind_code", String(20), nullable=False),
+    Column("kind_name", String(100), nullable=False),
+    Column("rank_code", String(20), nullable=False),
+    Column("rank_name", String(100)),
+    Column("quantity", DECIMAL(10, 2)),
+    Column("unit", String(20)),
+    UniqueConstraint(
+        "item_category_code",
+        "item_code",
+        "kind_code",
+        "rank_code",
+        name="uq_kamis_item_source_code",
+    ),
+)
+
+kamis_price_observation = Table(
+    "kamis_price_observation",
+    metadata,
+    Column("kamis_price_observation_id", BigInteger, primary_key=True, autoincrement=True),
+    Column("kamis_item_id", BigInteger, ForeignKey("kamis_item.kamis_item_id"), nullable=False),
+    Column("observed_date", Date, nullable=False),
+    Column("price", Integer, nullable=False),
+    Column("unit_price", DECIMAL(10, 2)),
+    Column("scope_name", String(50), nullable=False),
+    UniqueConstraint(
+        "kamis_item_id",
+        "observed_date",
+        "scope_name",
+        name="uq_kamis_price_item_date_scope",
     ),
 )
 
@@ -252,6 +315,7 @@ KNOWN_RETAILER_PREFIXES = [
     "GS더프레시",
     "세븐일레븐",
     "이마트에브리데이",
+    "이마트24",
     "이마트",
     "하나로마트",
     "GS25",
@@ -433,7 +497,7 @@ def normalize_csv_row(row: dict[str, str], row_number: int) -> ProcessedRow:
 def read_processed_rows(path: Path, log_path: Path) -> tuple[list[ProcessedRow], int]:
     rows: list[ProcessedRow] = []
     failed = 0
-    with path.open("r", encoding="utf-8-sig", newline="") as f:
+    with path.open("r", encoding=CSV_ENCODING, newline="") as f:
         reader = csv.DictReader(f)
         missing_columns = [column for column in REQUIRED_COLUMNS if column not in (reader.fieldnames or [])]
         if missing_columns:
@@ -484,6 +548,29 @@ def existing_composite_key_map(
         )
     )
     return {tuple(row[index] for index in range(len(key_columns))): int(row[-1]) for row in result}
+
+
+def existing_region_key_map(
+    conn: Connection,
+    keys: Sequence[tuple[int | None, str]],
+) -> dict[tuple[int | None, str], int]:
+    if not keys:
+        return {}
+
+    non_null_keys = [(parent_id, name) for parent_id, name in keys if parent_id is not None]
+    null_names = [name for parent_id, name in keys if parent_id is None]
+    conditions = []
+    if non_null_keys:
+        conditions.append(tuple_(region.c.parent_region_id, region.c.name).in_(non_null_keys))
+    if null_names:
+        conditions.append(region.c.parent_region_id.is_(None) & region.c.name.in_(null_names))
+    if not conditions:
+        return {}
+
+    result = conn.execute(
+        select(region.c.parent_region_id, region.c.name, region.c.region_id).where(or_(*conditions))
+    )
+    return {(row[0], row[1]): int(row[2]) for row in result}
 
 
 def insert_ignore_existing(
@@ -645,6 +732,11 @@ def load_stores(
                 "retailer_id": retailer_id,
                 "name": row.store_branch_name,
                 "source_store_name": row.store_name,
+                "store_type": "CHAIN_LEVEL" if "본사" in row.store_name else "BRANCH",
+                "store_status": "open",
+                "match_status": "matched",
+                "validation_status": "valid",
+                "region_id": None,
             }
         )
 
@@ -763,6 +855,7 @@ def run_load(
     database_url: str | None,
     create_schema: bool,
     env_file: Path,
+    load_stores_from_price: bool = False,
 ) -> LoadReport:
     log_path = setup_logging(report_dir)
     report = LoadReport()
@@ -824,13 +917,39 @@ def run_load(
         "retailer_id",
         batch_size,
     )
-    store_ids = load_stores(
-        engine,
-        report.tables["store"],
-        rows,
-        retailer_ids,
-        batch_size,
-    )
+    if load_stores_from_price:
+        store_ids = load_stores(
+            engine,
+            report.tables["store"],
+            rows,
+            retailer_ids,
+            batch_size,
+        )
+    else:
+        source_store_names = sorted({row.store_name for row in rows})
+        report.tables["store"].input_rows = len(source_store_names)
+        with engine.begin() as conn:
+            store_ids = existing_single_key_map(
+                conn,
+                store,
+                "store_id",
+                "source_store_name",
+                source_store_names,
+            )
+        report.tables["store"].skipped = len(store_ids)
+        report.tables["store"].failed = len(source_store_names) - len(store_ids)
+        if report.tables["store"].failed:
+            missing_store_names = [
+                source_store_name
+                for source_store_name in source_store_names
+                if source_store_name not in store_ids
+            ]
+            log_failure(
+                log_path,
+                "store",
+                "missing_preloaded_store_rows",
+                {"source_store_names": missing_store_names},
+            )
     load_price_observations(
         engine,
         report.tables["price_observation"],
@@ -883,6 +1002,14 @@ def main() -> int:
         action="store_true",
         help="Create missing tables using the current SQLAlchemy Core metadata.",
     )
+    parser.add_argument(
+        "--load-stores-from-price",
+        action="store_true",
+        help=(
+            "Legacy mode: derive retailer/store rows from the KCA price CSV. "
+            "Default expects store rows to be preloaded from kca_store_master.csv."
+        ),
+    )
     args = parser.parse_args()
     if args.batch_size <= 0:
         raise ValueError("--batch-size must be greater than 0.")
@@ -894,8 +1021,9 @@ def main() -> int:
             args.batch_size,
             args.database_url,
             args.create_schema,
-        resolve_project_path(args.env_file),
-    )
+            resolve_project_path(args.env_file),
+            args.load_stores_from_price,
+        )
     except MissingRequiredValueError as exc:
         logging.error("Required value validation failed: %s", exc)
         raise
