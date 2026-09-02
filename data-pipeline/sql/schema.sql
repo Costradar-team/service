@@ -43,11 +43,41 @@ CREATE TABLE IF NOT EXISTS product (
     FOREIGN KEY (subtype_id) REFERENCES item_subtype (subtype_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
+CREATE TABLE IF NOT EXISTS retailer (
+  retailer_id BIGINT NOT NULL AUTO_INCREMENT,
+  name VARCHAR(255) NOT NULL,
+  PRIMARY KEY (retailer_id),
+  UNIQUE KEY uq_retailer_name (name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS region (
+  region_id BIGINT NOT NULL AUTO_INCREMENT,
+  parent_region_id BIGINT NULL,
+  name VARCHAR(50) NOT NULL,
+  region_type VARCHAR(20) NOT NULL,
+  PRIMARY KEY (region_id),
+  UNIQUE KEY uq_region_parent_name (parent_region_id, name),
+  CONSTRAINT fk_region_parent
+    FOREIGN KEY (parent_region_id) REFERENCES region (region_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
 CREATE TABLE IF NOT EXISTS store (
   store_id BIGINT NOT NULL AUTO_INCREMENT,
+  retailer_id BIGINT NOT NULL,
   name VARCHAR(255) NOT NULL,
+  source_store_name VARCHAR(255) NOT NULL,
+  store_type VARCHAR(20) NOT NULL,
+  store_status VARCHAR(20) NOT NULL DEFAULT 'open',
+  match_status VARCHAR(20) NOT NULL DEFAULT 'matched',
+  validation_status VARCHAR(20) NOT NULL DEFAULT 'valid',
+  region_id BIGINT NULL,
   PRIMARY KEY (store_id),
-  UNIQUE KEY uq_store_name (name)
+  UNIQUE KEY uq_store_source_store_name (source_store_name),
+  UNIQUE KEY uq_store_retailer_name (retailer_id, name),
+  CONSTRAINT fk_store_retailer
+    FOREIGN KEY (retailer_id) REFERENCES retailer (retailer_id),
+  CONSTRAINT fk_store_region
+    FOREIGN KEY (region_id) REFERENCES region (region_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS price_observation (
