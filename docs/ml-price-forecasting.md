@@ -240,10 +240,20 @@ python -m pip install -r requirements-lightgbm.txt
 .\run_local.ps1 -SkipProfiling -TrainModel -Estimator lightgbm
 ```
 
+macOS / Linux 실행:
+
+```bash
+# 전체 파이프라인 (재학습 포함)
+./run_local.sh --skip-profiling --train-model
+
+# 예측만 갱신 및 테스트 실행
+./run_local.sh --skip-profiling --run-tests
+```
+
 테스트:
 
-```powershell
-python -m unittest discover -s ml\tests -v
+```bash
+python -m unittest discover -s ml/tests -v
 ```
 
 ## 7. 백엔드 전달 계약
@@ -324,6 +334,11 @@ Content-Type: application/json
 | `modelPredictedUnitPrice` | ML 모델 예측값 |
 | `modelPredictedStepChangePercent` | 직전 재귀 입력값 대비 단계별 예측 변화율 |
 | `modelPredictedChangePercent` | `asOfDate`의 실제 가격 대비 누적 예측 변화율 |
+| `predLow` | 통계적 예측 신뢰구간 하한선 (기본 80% 신뢰수준) |
+| `predHigh` | 통계적 예측 신뢰구간 상한선 (기본 80% 신뢰수준) |
+| `dropProbability` | 2주 뒤 가격이 현재 기준가보다 하락할 통계적 확률 (0.01 ~ 0.99) |
+| `signal` | 구매 의사결정 신호 (`BUY` / `WAIT` / `HOLD`) |
+| `signalMessage` | 의사결정 권고 메시지 (상승/하락 확률 수치 포함) |
 
 백엔드는 다음 조회 API로 프론트엔드에 제공할 수 있다.
 
