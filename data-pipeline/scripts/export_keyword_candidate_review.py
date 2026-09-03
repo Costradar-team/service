@@ -17,9 +17,16 @@ DEFAULT_OUTPUT_PATH = (
 
 def resolve_path(path_text: str) -> Path:
     path = Path(path_text)
-    if not path.is_absolute():
-        path = ROOT / path
-    return path
+    if path.is_absolute():
+        return path
+
+    cwd_candidate = Path.cwd() / path
+    root_candidate = ROOT / path
+    if cwd_candidate.exists():
+        return cwd_candidate
+    if root_candidate.exists():
+        return root_candidate
+    return cwd_candidate
 
 
 def load_summary(path: Path) -> dict[str, Any]:

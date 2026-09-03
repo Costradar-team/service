@@ -223,5 +223,12 @@ data-pipeline/reports/*
 # Local AI zip extract (store JSON is large; do not commit)
 tmp-forecast/
 
+# Generated local pipeline and ML artifacts
+artifacts/
+
+# Local agent working records
+AGENTS.md
+PROJECT_STATUS.md
+
 # Local environment variables
 .env
