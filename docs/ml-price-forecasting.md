@@ -374,9 +374,6 @@ Content-Type: application/json
       "currentUnitPrice": 2080.0,
       "modelPredictedUnitPrice": 2080.0,
       "modelPredictedChangePercent": 0.0,
-      "dropProbability": 0.5,
-      "signal": "HOLD",
-      "signalMessage": "2주 뒤 유의미한 가격 변동이 예상되지 않습니다.",
       "predictionStrategy": "direct_multi_horizon",
       "forecastMethod": "validated_baseline_fallback",
       "modelWeight": 0.0,
@@ -398,16 +395,13 @@ Content-Type: application/json
 | `unitPriceBasis` | KRW/kg, KRW/L, KRW/10ea |
 | `modelPredictedUnitPrice` | 검증된 직접 모델과 안전 기준선을 혼합한 최종 예측값 |
 | `modelPredictedChangePercent` | `asOfDate`의 실제 가격 대비 누적 예측 변화율 |
-| `dropProbability` | 해당 예측 기간의 가격이 현재 기준가보다 하락할 변동성 기반 근사치 (0.01~0.99) |
-| `signal` | 구매 의사결정 신호 (`BUY` / `WAIT` / `HOLD`) |
-| `signalMessage` | 의사결정 권고 메시지 (상승/하락 확률 수치 포함) |
 | `predictionStrategy` | `direct_multi_horizon` |
 | `forecastMethod` | 직접 모델, 혼합 모델 또는 검증 기반 기준선 전환 여부 |
 | `modelWeight` | 최종 예측에서 직접 ML이 차지하는 비율. 0~1 |
 | `selectedFeatureSet` | 소매 이력 또는 외부시장 추가 특성 중 검증으로 선택한 구성 |
 
-`dropProbability`는 과거 가격 변동성을 정규분포로 가정해 계산한 참고용 값이며,
-보정된 확률이나 가격 보장값이 아니다. 예측 하한·상한 구간은 JSON에 포함하지 않는다.
+현재 품목 예측 JSON은 가격과 변동률까지만 제공한다. 구매 신호·하락확률과 예측
+하한·상한 구간은 포함하지 않는다.
 
 백엔드는 다음 조회 API로 프론트엔드에 제공할 수 있다.
 

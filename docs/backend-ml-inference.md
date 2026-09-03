@@ -121,17 +121,13 @@ python ml\scripts\predict_advanced_item_prices.py `
   "currentUnitPrice": 2080.0,
   "modelPredictedUnitPrice": 2080.0,
   "modelPredictedChangePercent": 0.0,
-  "dropProbability": 0.5,
-  "signal": "HOLD",
-  "signalMessage": "2주 뒤 유의미한 가격 변동이 예상되지 않습니다.",
   "forecastMethod": "validated_baseline_fallback",
   "modelWeight": 0.0
 }
 ```
 
-추론 결과에는 `modelPredictedChangePercent`, 변동성 기반 `dropProbability`, 그리고
-BUY/HOLD/WAIT 판정이 함께 포함된다. 하락 가능성은 정규분포 가정에 따른 참고용
-근사치이며 보정된 확률이 아니다. 예측 하한·상한 구간은 반환하지 않는다.
+추론 결과는 `modelPredictedChangePercent`까지만 제공한다. BUY/HOLD/WAIT, 하락확률과
+예측 하한·상한은 이 품목 예측 계약에서 반환하지 않는다.
 
 전체 필드와 브랜드 예상가격 계산은
 [백엔드 전달용 품목 가격예측 JSON](backend-forecast-json.md)을 참고한다.

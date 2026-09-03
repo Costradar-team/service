@@ -49,9 +49,6 @@ class ExportBackendForecastsTest(unittest.TestCase):
                     "forecast_method": "validated_direct_ensemble",
                     "model_weight": "0.25",
                     "selected_feature_set": "retail_history",
-                    "drop_probability": "0.5",
-                    "signal": "HOLD",
-                    "signal_message": "2주 뒤 유의미한 가격 변동이 예상되지 않습니다.",
                 }
             )
             self.write_csv(item_input, [item_row])
@@ -135,8 +132,6 @@ class ExportBackendForecastsTest(unittest.TestCase):
                 item_payload["forecasts"][0]["predictionStrategy"],
                 "direct_multi_horizon",
             )
-            self.assertEqual(item_payload["forecasts"][0]["dropProbability"], 0.5)
-            self.assertEqual(item_payload["forecasts"][0]["signal"], "HOLD")
             self.assertEqual(subtype_payload["granularity"], "subtype")
             self.assertEqual(subtype_payload["schemaVersion"], "1.5")
             self.assertEqual(subtype_payload["forecastHorizon"], 1)

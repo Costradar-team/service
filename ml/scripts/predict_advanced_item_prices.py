@@ -10,10 +10,8 @@ import numpy as np
 import pandas as pd
 
 try:
-    from .price_signals import enrich_predictions_with_signals
     from .train_advanced_item_model import build_direct_future_features
 except ImportError:
-    from price_signals import enrich_predictions_with_signals  # type: ignore[no-redef]
     from train_advanced_item_model import build_direct_future_features  # type: ignore[no-redef]
 
 
@@ -107,11 +105,6 @@ def predict_advanced_item_prices(
         output_frames.append(step)
 
     output = pd.concat(output_frames, ignore_index=True)
-    output = enrich_predictions_with_signals(
-        output,
-        history_df=raw,
-        series_level="item",
-    )
     output_dir.mkdir(parents=True, exist_ok=True)
     forecast_path = output_dir / FORECAST_FILENAME
     report_path = output_dir / REPORT_FILENAME

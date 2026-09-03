@@ -53,9 +53,6 @@
   "modelPredictedUnitPrice": 2080.0,
   "modelPredictedChangePercent": 0.0,
   "forecastHorizonStep": 1,
-  "dropProbability": 0.5,
-  "signal": "HOLD",
-  "signalMessage": "2주 뒤 유의미한 가격 변동이 예상되지 않습니다.",
   "predictionStrategy": "direct_multi_horizon",
   "forecastMethod": "validated_baseline_fallback",
   "modelWeight": 0.0,
@@ -73,19 +70,14 @@
 | `modelPredictedUnitPrice` | 검증된 직접 모델과 안전 기준선을 혼합한 최종 미래 대표 단위가격 |
 | `modelPredictedChangePercent` | 마지막 실제 대표가격 대비 누적 예상 변동률 |
 | `forecastHorizonStep` | 1·2·3·4단계. 현재 데이터에서는 약 2·4·6·8주 후 |
-| `dropProbability` | 예측값과 과거 변동성으로 근사한 해당 기간 가격 하락 가능성. 0.01~0.99 |
-| `signal` | 변동률과 하락 가능성을 함께 사용한 `BUY`, `HOLD`, `WAIT` |
-| `signalMessage` | 해당 예측 기간에 맞춘 구매 신호 설명 |
 | `predictionStrategy` | 품목 모델은 `direct_multi_horizon` |
 | `forecastMethod` | `direct_model`, `validated_direct_ensemble`, `validated_baseline_fallback` 중 하나 |
 | `modelWeight` | 최종값에서 직접 ML 예측이 차지하는 비율. 0~1 |
 | `selectedFeatureSet` | 검증으로 선택한 `retail_history` 또는 외부시장 추가 구성 |
 
-`signal`은 현재 ±1.5% 변동 임계값과 `dropProbability`를 함께 사용한다. 예상 상승폭이
-1.5% 이상이고 하락 가능성이 45% 이하면 BUY, 예상 하락폭이 -1.5% 이하이고 하락
-가능성이 55% 이상이면 WAIT, 나머지는 HOLD다. `dropProbability`는 과거 변동성을
-정규분포로 가정한 근사치이며 보정된 확률이나 가격 보장값이 아니다. 예측 하한·상한
-구간은 이 파일에 포함하지 않는다.
+BUY/HOLD/WAIT 판정과 확률 계산은 별도 담당 범위다. 이 파일은 판정의 입력으로 사용할
+`modelPredictedChangePercent`까지만 제공하며, 예측 하한·상한이나 구매 신호를 포함하지
+않는다.
 
 ## 브랜드별 예상가격과 화면 절감액
 

@@ -105,11 +105,9 @@ class AdvancedItemForecastingTest(unittest.TestCase):
             )
             self.assertNotIn("pred_low", forecasts.columns)
             self.assertNotIn("pred_high", forecasts.columns)
-            self.assertTrue(
-                {"drop_probability", "signal", "signal_message"}.issubset(
-                    forecasts.columns
-                )
-            )
+            self.assertNotIn("drop_probability", forecasts.columns)
+            self.assertNotIn("signal", forecasts.columns)
+            self.assertNotIn("signal_message", forecasts.columns)
             saved_report = json.loads(
                 (model_dir / "prediction_report.json").read_text(encoding="utf-8")
             )
