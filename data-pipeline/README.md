@@ -28,6 +28,57 @@ data-pipeline\reports\load\kca_load.log
 data-pipeline\reports\load\kca_load_failures.jsonl
 ```
 
+KCA 정제 CSV에서 distinct 판매업소 목록을 별도 CSV로 생성한다.
+
+```powershell
+python data-pipeline\scripts\transform\export_kca_stores.py
+```
+
+기본 출력 파일:
+
+```text
+data-pipeline\data\processed\kca\kca_stores.csv
+```
+
+Kakao Local keyword API로 판매업소 주소/지역을 보강한다.
+루트 `.env`에 `KAKAO_REST_API_KEY` 또는 `KAKAO_API_KEY`를 설정해야 한다.
+검증된 예외 매칭은 `data-pipeline\data\reference\kca\store_match_overrides.csv`에서 관리한다.
+
+```powershell
+python data-pipeline\scripts\collect\collect_kca_store_regions_kakao.py
+```
+
+기존 master를 모두 무시하고 새 매칭/override 로직으로 재생성할 때:
+
+```powershell
+python data-pipeline\scripts\collect\collect_kca_store_regions_kakao.py --refresh-all
+```
+
+기본 출력 파일:
+
+```text
+data-pipeline\data\processed\kca\kca_store_master.csv
+```
+
+지역 보강된 판매업소 master를 MySQL에 먼저 적재한다.
+
+```powershell
+python data-pipeline\scripts\load\load_kca_store_mysql.py
+```
+
+그 다음 KCA 가격 데이터를 적재한다. 기본 동작은 `store`를 새로 만들지 않고
+이미 적재된 `store.source_store_name`을 참조한다.
+
+```powershell
+python data-pipeline\scripts\load\load_kca_mysql.py
+```
+
+임시로 예전처럼 가격 CSV에서 `store`를 생성해야 할 때만 아래 옵션을 사용한다.
+
+```powershell
+python data-pipeline\scripts\load\load_kca_mysql.py --load-stores-from-price
+```
+
 ## FIS MySQL Load
 
 FIS 원자재 가격 변환 결과를 현재 ERD의 `fis_item`, `fis_price_observation` 테이블에 적재한다.

@@ -40,18 +40,69 @@ Table retailer {
   Note: '판매처 체인/브랜드. 예: 이마트, 롯데마트, 홈플러스, GS더프레시'
 }
 
+//재귀 테이블
+Table region {
+  region_id bigint [pk, increment]
+
+  // 상위 지역. 최상위 시/도는 null
+  parent_region_id bigint
+
+  // 서비스에서 사용하는 정규화된 지역명
+  name varchar(50) [not null]
+
+  // SIDO, SI, GUN, GU, EUP, MYEON, DONG, RI 등
+  region_type varchar(20) [not null]
+
+  indexes {
+    (parent_region_id, name) [unique]
+  }
+
+  Note: '지역 계층. 예: 서울 > 강남구, 경기 > 성남시 > 분당구'
+}
+
 Table store {
   store_id bigint [pk, increment]
   retailer_id bigint [not null]
+
   name varchar(255) [not null]
   source_store_name varchar(255) [not null, unique]
+
+  // BRANCH: 실제 개별 지점
+  // CHAIN_LEVEL: 특정 지점이 아닌 체인 단위 가격
+  store_type varchar(20) [not null]
+
+  // open, closed, historical, unknown 등 매장 영업/이력 상태
+  store_status varchar(20) [not null]
+
+  // matched, review, api_not_found, unmatched 등 장소 매칭 판정
+  match_status varchar(20) [not null]
+
+  // valid, review, not_applicable 등 매칭 검증 상태
+  validation_status varchar(20) [not null]
+
+  // BRANCH일 경우 매장이 속한 가장 구체적인 지역
+  // CHAIN_LEVEL은 특정 지역에 귀속되지 않으므로 NULL
+  region_id bigint
 
   indexes {
     (retailer_id, name) [unique]
   }
 
-  Note: '개별 지점. 예: 이마트 월계점, 이마트 왕십리점
-  원천 데이터를 보관하기 위해 source store name 을 추가'
+  Note: '''
+  판매 가격이 관측되는 판매처 단위.
+
+  BRANCH:
+    실제 개별 지점.
+    예: 이마트 월계점, 롯데슈퍼 장위점
+    region_id 필수
+
+  CHAIN_LEVEL:
+    특정 지점이 아닌 체인 단위로 제공된 가격.
+    예: CU(본사), GS25(본사)
+    region_id는 NULL
+
+  source_store_name은 원천 데이터의 판매업소명을 그대로 보관한다.
+  '''
 }
 
 Table price_observation {
@@ -191,3 +242,6 @@ Ref: fis_item.canonical_item_id > canonical_item.canonical_item_id
 // kamis 
 Ref: kamis_item.canonical_item_id > canonical_item.canonical_item_id
 Ref: kamis_price_observation.kamis_item_id > kamis_item.kamis_item_id
+
+Ref: region.parent_region_id > region.region_id
+Ref: store.region_id > region.region_id
