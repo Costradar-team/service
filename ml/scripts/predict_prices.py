@@ -26,6 +26,7 @@ FORECAST_FILENAME = "future_predictions.csv"
 REPORT_FILENAME = "prediction_report.json"
 
 SUBTYPE_GROUP_COLUMNS = ["canonical_item", "subtype", "unit_price_basis"]
+ITEM_GROUP_COLUMNS = ["canonical_item", "unit_price_basis"]
 PRODUCT_GROUP_COLUMNS = [
     "canonical_item",
     "subtype",
@@ -59,6 +60,8 @@ REQUIRED_MODEL_KEYS = {
 
 
 def group_columns_for(series_level: str) -> list[str]:
+    if series_level == "item":
+        return ITEM_GROUP_COLUMNS
     if series_level == "subtype":
         return SUBTYPE_GROUP_COLUMNS
     if series_level == "product":
@@ -68,7 +71,7 @@ def group_columns_for(series_level: str) -> list[str]:
     if series_level == "store":
         return STORE_GROUP_COLUMNS
     raise ValueError(
-        "series_level must be 'subtype', 'product', 'brand', or 'store'"
+        "series_level must be 'item', 'subtype', 'product', 'brand', or 'store'"
     )
 
 
@@ -339,7 +342,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--series-level",
-        choices=["subtype", "product", "brand", "store"],
+        choices=["item", "subtype", "product", "brand", "store"],
         default="subtype",
     )
     parser.add_argument(

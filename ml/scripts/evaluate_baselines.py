@@ -17,6 +17,7 @@ METRICS_FILENAME = "baseline_metrics.json"
 PREDICTIONS_FILENAME = "baseline_predictions.csv"
 
 SUBTYPE_SERIES_COLUMNS = ("canonical_item", "subtype", "unit_price_basis")
+ITEM_SERIES_COLUMNS = ("canonical_item", "unit_price_basis")
 PRODUCT_SERIES_COLUMNS = (
     "canonical_item",
     "subtype",
@@ -107,7 +108,9 @@ def evaluate_baselines(
     if not input_path.is_file():
         raise FileNotFoundError(f"Model dataset not found: {input_path}")
 
-    if series_level == "subtype":
+    if series_level == "item":
+        series_columns = ITEM_SERIES_COLUMNS
+    elif series_level == "subtype":
         series_columns = SUBTYPE_SERIES_COLUMNS
     elif series_level == "product":
         series_columns = PRODUCT_SERIES_COLUMNS
@@ -117,7 +120,7 @@ def evaluate_baselines(
         series_columns = STORE_SERIES_COLUMNS
     else:
         raise ValueError(
-            "series_level must be 'subtype', 'product', 'brand', or 'store'"
+            "series_level must be 'item', 'subtype', 'product', 'brand', or 'store'"
         )
     target_column = (
         "actual_unit_price" if series_level == "store" else "median_unit_price"
@@ -221,6 +224,7 @@ def evaluate_baselines(
             "Metrics use chronological one-step-ahead evaluation.",
             "These baselines are reference points, not production forecasts.",
             {
+                "item": "All products and stores are aggregated by canonical item.",
                 "subtype": "Store and product rows are aggregated by subtype.",
                 "product": "Store-level rows are aggregated by product.",
                 "brand": "Store-level rows are aggregated by product and brand.",
@@ -287,7 +291,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--series-level",
-        choices=["subtype", "product", "brand", "store"],
+        choices=["item", "subtype", "product", "brand", "store"],
         default="subtype",
         help="Prediction grain used to identify independent price series.",
     )

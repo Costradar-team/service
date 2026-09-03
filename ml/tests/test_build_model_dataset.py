@@ -114,6 +114,10 @@ class BuildModelDatasetTest(unittest.TestCase):
                 "r", encoding="utf-8-sig", newline=""
             ) as model_file:
                 model_rows = list(csv.DictReader(model_file))
+            with (output_dir / "item" / "model_dataset.csv").open(
+                "r", encoding="utf-8-sig", newline=""
+            ) as item_model_file:
+                item_rows = list(csv.DictReader(item_model_file))
             with (output_dir / "product" / "model_dataset.csv").open(
                 "r", encoding="utf-8-sig", newline=""
             ) as product_model_file:
@@ -132,6 +136,12 @@ class BuildModelDatasetTest(unittest.TestCase):
             self.assertEqual(len(model_rows), 2)
             self.assertEqual(model_rows[0]["median_unit_price"], "2200")
             self.assertEqual(model_rows[0]["store_count"], "2")
+            self.assertEqual(summary["item_model_row_count"], 2)
+            self.assertEqual(summary["item_series_count"], 1)
+            self.assertEqual(len(item_rows), 2)
+            self.assertEqual(item_rows[0]["canonical_item"], "밀가루")
+            self.assertEqual(item_rows[0]["median_unit_price"], "2200")
+            self.assertNotIn("subtype", item_rows[0])
             self.assertEqual(summary["product_model_row_count"], 3)
             self.assertEqual(summary["product_series_count"], 2)
             self.assertEqual(len(product_rows), 3)

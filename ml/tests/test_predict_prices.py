@@ -161,6 +161,34 @@ class PredictPricesTest(unittest.TestCase):
                 forecast_horizon=0,
             )
 
+    def test_item_model_outputs_one_forecast_per_item(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            input_path = root / "item_model_dataset.csv"
+            model_dir = root / "item_model"
+            output_dir = root / "item_prediction"
+            self.build_dataset(input_path)
+
+            train_price_model(
+                input_path,
+                model_dir,
+                series_level="item",
+            )
+            report = predict_prices(
+                input_path,
+                model_dir / "price_model.joblib",
+                output_dir,
+                series_level="item",
+                forecast_horizon=2,
+            )
+
+            self.assertEqual(report["forecast_series_count"], 2)
+            self.assertEqual(report["forecast_count"], 4)
+            forecasts = pd.read_csv(output_dir / "future_predictions.csv")
+            self.assertNotIn("subtype", forecasts.columns)
+            self.assertEqual(set(forecasts["canonical_item"]), {"밀가루", "설탕"})
+            self.assertIn("model_predicted_change_percent", forecasts.columns)
+
     def test_store_forecast_predicts_direct_prices_recursively(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

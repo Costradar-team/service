@@ -32,14 +32,29 @@ class ExportBackendForecastsTest(unittest.TestCase):
             writer.writeheader()
             writer.writerows(rows)
 
-    def test_exports_subtype_and_product_api_payloads(self) -> None:
+    def test_exports_item_and_legacy_api_payloads(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
+            item_input = temp_path / "item.csv"
             subtype_input = temp_path / "subtype.csv"
             product_input = temp_path / "product.csv"
             brand_input = temp_path / "brand.csv"
             store_input = temp_path / "store.csv"
             output_dir = temp_path / "backend"
+            item_row = COMMON_ROW.copy()
+            item_row.pop("subtype")
+            item_row.update(
+                {
+                    "prediction_strategy": "direct_multi_horizon",
+                    "forecast_method": "validated_direct_ensemble",
+                    "model_weight": "0.25",
+                    "selected_feature_set": "retail_history",
+                    "drop_probability": "0.5",
+                    "signal": "HOLD",
+                    "signal_message": "2주 뒤 유의미한 가격 변동이 예상되지 않습니다.",
+                }
+            )
+            self.write_csv(item_input, [item_row])
             self.write_csv(subtype_input, [COMMON_ROW])
             self.write_csv(
                 product_input,
@@ -70,12 +85,19 @@ class ExportBackendForecastsTest(unittest.TestCase):
                 output_dir,
                 brand_input=brand_input,
                 store_input=store_input,
+                item_input=item_input,
             )
 
+            self.assertEqual(summary["item_forecast_count"], 1)
             self.assertEqual(summary["subtype_forecast_count"], 1)
             self.assertEqual(summary["product_forecast_count"], 1)
             self.assertEqual(summary["brand_forecast_count"], 1)
             self.assertEqual(summary["store_forecast_count"], 1)
+            item_payload = json.loads(
+                (output_dir / "item_forecasts.json").read_text(
+                    encoding="utf-8"
+                )
+            )
             subtype_payload = json.loads(
                 (output_dir / "subtype_forecasts.json").read_text(
                     encoding="utf-8"
@@ -96,8 +118,27 @@ class ExportBackendForecastsTest(unittest.TestCase):
                     encoding="utf-8"
                 )
             )
+            self.assertEqual(item_payload["granularity"], "item")
+            self.assertEqual(item_payload["schemaVersion"], "1.5")
+            self.assertEqual(item_payload["forecasts"][0]["canonicalItem"], "밀가루")
+            self.assertNotIn("subtype", item_payload["forecasts"][0])
+            self.assertNotIn(
+                "predictionIntervalLower", item_payload["forecasts"][0]
+            )
+            self.assertNotIn(
+                "predictionIntervalUpper", item_payload["forecasts"][0]
+            )
+            self.assertNotIn(
+                "predictionIntervalConfidenceLevel", item_payload["forecasts"][0]
+            )
+            self.assertEqual(
+                item_payload["forecasts"][0]["predictionStrategy"],
+                "direct_multi_horizon",
+            )
+            self.assertEqual(item_payload["forecasts"][0]["dropProbability"], 0.5)
+            self.assertEqual(item_payload["forecasts"][0]["signal"], "HOLD")
             self.assertEqual(subtype_payload["granularity"], "subtype")
-            self.assertEqual(subtype_payload["schemaVersion"], "1.3")
+            self.assertEqual(subtype_payload["schemaVersion"], "1.5")
             self.assertEqual(subtype_payload["forecastHorizon"], 1)
             self.assertEqual(
                 subtype_payload["forecasts"][0]["currentUnitPrice"],
@@ -175,8 +216,8 @@ class ExportBackendForecastsTest(unittest.TestCase):
                 )
             )
             item = subtype_payload["forecasts"][0]
-            self.assertEqual(item["predLow"], 1950.0)
-            self.assertEqual(item["predHigh"], 2050.0)
+            self.assertNotIn("predLow", item)
+            self.assertNotIn("predHigh", item)
             self.assertEqual(item["dropProbability"], 0.6542)
             self.assertEqual(item["signal"], "WAIT")
             self.assertEqual(item["signalMessage"], "2주 뒤 가격이 내릴 것으로 보입니다.")

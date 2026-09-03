@@ -36,6 +36,7 @@ DEFAULT_OUTPUT_DIR = REPO_ROOT / "artifacts" / "ml"
 
 NORMALIZED_FILENAME = "normalized_prices.csv"
 MODEL_DATASET_FILENAME = "model_dataset.csv"
+ITEM_OUTPUT_DIRNAME = "item"
 PRODUCT_OUTPUT_DIRNAME = "product"
 BRAND_OUTPUT_DIRNAME = "brand"
 STORE_OUTPUT_DIRNAME = "store"
@@ -94,6 +95,18 @@ MODEL_COLUMNS = [
     "survey_date",
     "canonical_item",
     "subtype",
+    "unit_price_basis",
+    "observation_count",
+    "store_count",
+    "sku_count",
+    "min_unit_price",
+    "median_unit_price",
+    "max_unit_price",
+] + EXTERNAL_FEATURE_COLUMNS
+
+ITEM_MODEL_COLUMNS = [
+    "survey_date",
+    "canonical_item",
     "unit_price_basis",
     "observation_count",
     "store_count",
@@ -248,6 +261,9 @@ def build_model_dataset(
     output_dir.mkdir(parents=True, exist_ok=True)
     normalized_path = output_dir / NORMALIZED_FILENAME
     model_path = output_dir / MODEL_DATASET_FILENAME
+    item_output_dir = output_dir / ITEM_OUTPUT_DIRNAME
+    item_output_dir.mkdir(parents=True, exist_ok=True)
+    item_model_path = item_output_dir / MODEL_DATASET_FILENAME
     product_output_dir = output_dir / PRODUCT_OUTPUT_DIRNAME
     product_output_dir.mkdir(parents=True, exist_ok=True)
     product_model_path = product_output_dir / MODEL_DATASET_FILENAME
@@ -267,6 +283,10 @@ def build_model_dataset(
 
     aggregates: dict[
         tuple[str, str, str, str],
+        dict[str, Any],
+    ] = {}
+    item_aggregates: dict[
+        tuple[str, str, str],
         dict[str, Any],
     ] = {}
     product_aggregates: dict[
@@ -383,6 +403,19 @@ def build_model_dataset(
             accumulator["stores"].add((row.get("판매업소") or "").strip())
             accumulator["skus"].add(product_name)
 
+            item_key = (
+                survey_date,
+                canonical_item,
+                normalized.unit_price_basis,
+            )
+            item_accumulator = item_aggregates.setdefault(
+                item_key,
+                {"prices": [], "stores": set(), "skus": set()},
+            )
+            item_accumulator["prices"].append(normalized.unit_price)
+            item_accumulator["stores"].add(store_name)
+            item_accumulator["skus"].add(product_name)
+
             product_key = (
                 survey_date,
                 product_name,
@@ -462,6 +495,41 @@ def build_model_dataset(
         writer = csv.DictWriter(model_file, fieldnames=MODEL_COLUMNS)
         writer.writeheader()
         writer.writerows(model_rows)
+
+    item_model_rows = []
+    for (
+        survey_date,
+        canonical_item,
+        basis,
+    ), accumulator in sorted(item_aggregates.items()):
+        prices = accumulator["prices"]
+        item_model_rows.append(
+            {
+                "survey_date": survey_date,
+                "canonical_item": canonical_item,
+                "unit_price_basis": basis,
+                "observation_count": len(prices),
+                "store_count": len(accumulator["stores"]),
+                "sku_count": len(accumulator["skus"]),
+                "min_unit_price": format_number(min(prices), 4),
+                "median_unit_price": format_number(median(prices), 4),
+                "max_unit_price": format_number(max(prices), 4),
+            }
+        )
+
+    external_enriched_counts["item"] = enrich_rows_with_external_market(
+        item_model_rows,
+        external_series,
+    )
+    with item_model_path.open(
+        "w", encoding="utf-8-sig", newline=""
+    ) as item_model_file:
+        writer = csv.DictWriter(
+            item_model_file,
+            fieldnames=ITEM_MODEL_COLUMNS,
+        )
+        writer.writeheader()
+        writer.writerows(item_model_rows)
 
     product_model_rows = []
     for (
@@ -588,6 +656,13 @@ def build_model_dataset(
         "normalized_row_count": normalized_count,
         "rejected_row_count": rejected_count,
         "model_row_count": len(model_rows),
+        "item_model_row_count": len(item_model_rows),
+        "item_series_count": len(
+            {
+                (row["canonical_item"], row["unit_price_basis"])
+                for row in item_model_rows
+            }
+        ),
         "product_model_row_count": len(product_model_rows),
         "product_series_count": len(
             {
@@ -641,6 +716,7 @@ def build_model_dataset(
         "outputs": {
             "normalized_prices": str(normalized_path),
             "model_dataset": str(model_path),
+            "item_model_dataset": str(item_model_path),
             "product_model_dataset": str(product_model_path),
             "brand_model_dataset": str(brand_model_path),
             "store_model_dataset": str(store_model_path),

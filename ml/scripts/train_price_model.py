@@ -25,6 +25,7 @@ DEFAULT_INPUT = REPO_ROOT / "artifacts" / "ml" / "model_dataset.csv"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "artifacts" / "ml" / "model"
 
 SUBTYPE_GROUP_COLUMNS = ["canonical_item", "subtype", "unit_price_basis"]
+ITEM_GROUP_COLUMNS = ["canonical_item", "unit_price_basis"]
 PRODUCT_GROUP_COLUMNS = [
     "canonical_item",
     "subtype",
@@ -73,6 +74,8 @@ def resolve_cli_path(path_text: str) -> Path:
 
 
 def group_columns_for(series_level: str) -> list[str]:
+    if series_level == "item":
+        return ITEM_GROUP_COLUMNS
     if series_level == "subtype":
         return SUBTYPE_GROUP_COLUMNS
     if series_level == "product":
@@ -82,7 +85,7 @@ def group_columns_for(series_level: str) -> list[str]:
     if series_level == "store":
         return STORE_GROUP_COLUMNS
     raise ValueError(
-        "series_level must be 'subtype', 'product', 'brand', or 'store'"
+        "series_level must be 'item', 'subtype', 'product', 'brand', or 'store'"
     )
 
 
@@ -102,6 +105,21 @@ def smape(actual: np.ndarray, predicted: np.ndarray) -> float:
     return float(np.mean(values))
 
 
+def mape(actual: np.ndarray, predicted: np.ndarray) -> float:
+    valid = actual != 0
+    if not np.any(valid):
+        return 0.0
+    values = 100 * np.abs(predicted[valid] - actual[valid]) / np.abs(actual[valid])
+    return float(np.mean(values))
+
+
+def wmape(actual: np.ndarray, predicted: np.ndarray) -> float:
+    denominator = float(np.sum(np.abs(actual)))
+    if denominator == 0:
+        return 0.0
+    return float(100 * np.sum(np.abs(predicted - actual)) / denominator)
+
+
 def direction_accuracy(
     actual: np.ndarray,
     predicted: np.ndarray,
@@ -118,6 +136,8 @@ def calculate_metrics(
     return {
         "sample_count": int(len(actual)),
         "mae": round(float(np.mean(np.abs(predicted - actual))), 4),
+        "mape_percent": round(mape(actual, predicted), 4),
+        "wmape_percent": round(wmape(actual, predicted), 4),
         "smape_percent": round(smape(actual, predicted), 4),
         "direction_accuracy": round(
             direction_accuracy(actual, predicted, previous),
@@ -478,7 +498,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--series-level",
-        choices=["subtype", "product", "brand", "store"],
+        choices=["item", "subtype", "product", "brand", "store"],
         default="subtype",
         help="Prediction grain used to identify independent price series.",
     )

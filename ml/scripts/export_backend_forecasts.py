@@ -8,6 +8,14 @@ from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_ITEM_INPUT = (
+    REPO_ROOT
+    / "artifacts"
+    / "ml"
+    / "item"
+    / "model"
+    / "future_predictions.csv"
+)
 DEFAULT_SUBTYPE_INPUT = REPO_ROOT / "artifacts" / "ml" / "model" / "future_predictions.csv"
 DEFAULT_PRODUCT_INPUT = (
     REPO_ROOT
@@ -35,6 +43,7 @@ DEFAULT_STORE_INPUT = (
 )
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "artifacts" / "ml" / "backend"
 
+ITEM_OUTPUT_FILENAME = "item_forecasts.json"
 SUBTYPE_OUTPUT_FILENAME = "subtype_forecasts.json"
 PRODUCT_OUTPUT_FILENAME = "product_forecasts.json"
 BRAND_OUTPUT_FILENAME = "brand_forecasts.json"
@@ -50,11 +59,13 @@ OPTIONAL_COMMON_COLUMNS = [
     "recursive_input_unit_price",
     "recursive_input_source",
     "model_predicted_step_change_percent",
-    "pred_low",
-    "pred_high",
     "drop_probability",
     "signal",
     "signal_message",
+    "prediction_strategy",
+    "forecast_method",
+    "model_weight",
+    "selected_feature_set",
 ]
 NUMERIC_COLUMNS = {
     "current_median_unit_price",
@@ -63,9 +74,8 @@ NUMERIC_COLUMNS = {
     "model_predicted_change_percent",
     "recursive_input_unit_price",
     "model_predicted_step_change_percent",
-    "pred_low",
-    "pred_high",
     "drop_probability",
+    "model_weight",
 }
 INTEGER_COLUMNS = {"forecast_horizon_step"}
 JSON_FIELD_NAMES = {
@@ -85,11 +95,13 @@ JSON_FIELD_NAMES = {
     "recursive_input_unit_price": "recursiveInputUnitPrice",
     "recursive_input_source": "recursiveInputSource",
     "model_predicted_step_change_percent": "modelPredictedStepChangePercent",
-    "pred_low": "predLow",
-    "pred_high": "predHigh",
     "drop_probability": "dropProbability",
     "signal": "signal",
     "signal_message": "signalMessage",
+    "prediction_strategy": "predictionStrategy",
+    "forecast_method": "forecastMethod",
+    "model_weight": "modelWeight",
+    "selected_feature_set": "selectedFeatureSet",
 }
 
 
@@ -99,9 +111,9 @@ def resolve_cli_path(path_text: str) -> Path:
 
 
 def load_forecasts(path: Path, granularity: str) -> list[dict[str, Any]]:
-    if granularity not in {"subtype", "product", "brand", "store"}:
+    if granularity not in {"item", "subtype", "product", "brand", "store"}:
         raise ValueError(
-            "granularity must be 'subtype', 'product', 'brand', or 'store'"
+            "granularity must be 'item', 'subtype', 'product', 'brand', or 'store'"
         )
     if not path.is_file():
         raise FileNotFoundError(f"Forecast CSV not found: {path}")
@@ -110,8 +122,9 @@ def load_forecasts(path: Path, granularity: str) -> list[dict[str, Any]]:
         "forecast_date",
         "as_of_date",
         "canonical_item",
-        "subtype",
     ]
+    if granularity != "item":
+        columns.append("subtype")
     if granularity in {"product", "brand", "store"}:
         columns.append("product_name")
     if granularity in {"brand", "store"}:
@@ -168,7 +181,7 @@ def write_payload(
         default=0,
     )
     payload = {
-        "schemaVersion": "1.3",
+        "schemaVersion": "1.5",
         "granularity": granularity,
         "forecastHorizon": forecast_horizon,
         "forecastCount": len(forecasts),
@@ -186,14 +199,19 @@ def export_backend_forecasts(
     output_dir: Path,
     brand_input: Path | None = None,
     store_input: Path | None = None,
+    item_input: Path | None = None,
 ) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
+    item_output = output_dir / ITEM_OUTPUT_FILENAME
     subtype_output = output_dir / SUBTYPE_OUTPUT_FILENAME
     product_output = output_dir / PRODUCT_OUTPUT_FILENAME
     brand_output = output_dir / BRAND_OUTPUT_FILENAME
     store_output = output_dir / STORE_OUTPUT_FILENAME
     summary_output = output_dir / SUMMARY_FILENAME
 
+    item_forecasts = (
+        load_forecasts(item_input, "item") if item_input is not None else []
+    )
     subtype_forecasts = load_forecasts(subtype_input, "subtype")
     product_forecasts = load_forecasts(product_input, "product")
     brand_forecasts = (
@@ -202,6 +220,8 @@ def export_backend_forecasts(
     store_forecasts = (
         load_forecasts(store_input, "store") if store_input is not None else []
     )
+    if item_input is not None:
+        write_payload(item_output, "item", item_forecasts)
     write_payload(subtype_output, "subtype", subtype_forecasts)
     write_payload(product_output, "product", product_forecasts)
     if brand_input is not None:
@@ -210,12 +230,14 @@ def export_backend_forecasts(
         write_payload(store_output, "store", store_forecasts)
 
     summary = {
-        "schema_version": "1.3",
+        "schema_version": "1.5",
+        "item_forecast_count": len(item_forecasts),
         "subtype_forecast_count": len(subtype_forecasts),
         "product_forecast_count": len(product_forecasts),
         "brand_forecast_count": len(brand_forecasts),
         "store_forecast_count": len(store_forecasts),
         "outputs": {
+            **({"item": str(item_output)} if item_input is not None else {}),
             "subtype": str(subtype_output),
             "product": str(product_output),
             **({"brand": str(brand_output)} if brand_input is not None else {}),
@@ -232,7 +254,12 @@ def export_backend_forecasts(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Export subtype and product forecasts as backend API payloads."
+        description="Export item and legacy forecasts as backend API payloads."
+    )
+    parser.add_argument(
+        "--item-input",
+        default=str(DEFAULT_ITEM_INPUT),
+        help="Path to item-level future_predictions.csv.",
     )
     parser.add_argument(
         "--subtype-input",
@@ -267,6 +294,7 @@ def main() -> int:
         resolve_cli_path(args.output_dir),
         brand_input=resolve_cli_path(args.brand_input),
         store_input=resolve_cli_path(args.store_input),
+        item_input=resolve_cli_path(args.item_input),
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0

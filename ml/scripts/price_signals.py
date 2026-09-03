@@ -7,14 +7,6 @@ import numpy as np
 import pandas as pd
 
 
-# Z-scores for standard confidence intervals
-CONFIDENCE_Z_SCORES = {
-    0.80: 1.28155,
-    0.85: 1.43953,
-    0.90: 1.64485,
-    0.95: 1.95996,
-}
-DEFAULT_CONFIDENCE = 0.80
 DEFAULT_VOLATILITY = 0.035  # 3.5% baseline relative volatility
 MIN_VOLATILITY = 0.015      # 1.5% minimum floor to prevent zero-width intervals
 
@@ -44,30 +36,13 @@ def calculate_drop_probability(
     return round(float(np.clip(prob, 0.01, 0.99)), 4)
 
 
-def calculate_prediction_interval(
-    predicted_price: float,
-    volatility: float,
-    confidence_level: float = DEFAULT_CONFIDENCE,
-) -> tuple[float, float]:
-    """Computes symmetric prediction bounds [pred_low, pred_high] for the given confidence level."""
-    if predicted_price <= 0:
-        return 0.0, 0.0
-
-    z_score = CONFIDENCE_Z_SCORES.get(confidence_level, 1.28155)
-    vol = max(volatility, MIN_VOLATILITY)
-    margin = predicted_price * vol * z_score
-
-    pred_low = max(0.0, round(predicted_price - margin, 2))
-    pred_high = round(predicted_price + margin, 2)
-    return pred_low, pred_high
-
-
 def classify_price_signal(
     current_price: float,
     predicted_price: float,
     drop_probability: float,
     change_percent: float,
     threshold_percent: float = 1.5,
+    horizon_weeks: int = 2,
 ) -> tuple[str, str]:
     """Determines BUY / WAIT / HOLD decision signal and explanation message.
 
@@ -81,19 +56,21 @@ def classify_price_signal(
     if drop_probability <= 0.45 and change_percent >= threshold_percent:
         signal = "BUY"
         message = (
-            f"2주 뒤 가격이 오를 것으로 보입니다 (상승 확률 {rise_prob_pct}%). "
+            f"{horizon_weeks}주 뒤 가격이 오를 것으로 보입니다 "
+            f"(상승 확률 {rise_prob_pct}%). "
             "필요 수량을 미리 구매해 두는 것이 유리합니다."
         )
     elif drop_probability >= 0.55 and change_percent <= -threshold_percent:
         signal = "WAIT"
         message = (
-            f"2주 뒤 가격이 내릴 것으로 보입니다 (하락 확률 {drop_prob_pct}%). "
+            f"{horizon_weeks}주 뒤 가격이 내릴 것으로 보입니다 "
+            f"(하락 확률 {drop_prob_pct}%). "
             "대량 구매를 미루고 관망하는 것을 권장합니다."
         )
     else:
         signal = "HOLD"
         message = (
-            "2주 뒤 유의미한 가격 변동이 예상되지 않습니다. "
+            f"{horizon_weeks}주 뒤 유의미한 가격 변동이 예상되지 않습니다. "
             "통상적인 주기에 맞춰 구매해도 무방합니다."
         )
 
@@ -148,9 +125,8 @@ def enrich_predictions_with_signals(
     predictions_df: pd.DataFrame,
     history_df: pd.DataFrame | None = None,
     series_level: str = "subtype",
-    confidence_level: float = DEFAULT_CONFIDENCE,
 ) -> pd.DataFrame:
-    """Enriches future_predictions DataFrame with signal, drop probability, and confidence intervals."""
+    """Enriches future predictions with decision signals and drop probability."""
     if predictions_df.empty:
         return predictions_df
 
@@ -168,8 +144,6 @@ def enrich_predictions_with_signals(
     if pred_price_col not in df.columns:
         return df
 
-    pred_lows = []
-    pred_highs = []
     drop_probs = []
     signals = []
     messages = []
@@ -181,19 +155,21 @@ def enrich_predictions_with_signals(
         canonical_item = str(row.get("canonical_item") or "")
 
         volatility = volatility_map.get(canonical_item, DEFAULT_VOLATILITY)
+        horizon_step = int(row.get("forecast_horizon_step") or 1)
 
-        low, high = calculate_prediction_interval(pred_price, volatility, confidence_level)
         drop_prob = calculate_drop_probability(curr_price, pred_price, volatility)
-        signal, msg = classify_price_signal(curr_price, pred_price, drop_prob, change_pct)
+        signal, msg = classify_price_signal(
+            curr_price,
+            pred_price,
+            drop_prob,
+            change_pct,
+            horizon_weeks=horizon_step * 2,
+        )
 
-        pred_lows.append(low)
-        pred_highs.append(high)
         drop_probs.append(drop_prob)
         signals.append(signal)
         messages.append(msg)
 
-    df["pred_low"] = pred_lows
-    df["pred_high"] = pred_highs
     df["drop_probability"] = drop_probs
     df["signal"] = signals
     df["signal_message"] = messages

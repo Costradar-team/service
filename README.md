@@ -6,24 +6,30 @@
 현재 데이터 파이프라인은 한국소비자원 생필품 가격 CSV에서 밀가루, 설탕,
 버터, 계란, 우유를 선별합니다. 로컬 실행 파이프라인은 원천 데이터 품질 검사,
 품목 매핑, 단위가격 표준화, 날짜별 대표가격 생성, 기준 모델 평가를 순서대로
-수행합니다. 예측 결과는 세부유형, 개별 상품명, 브랜드, 지점 실제가격의 네 가지
-단위로 생성합니다. FIS의 밀·설탕 선물과 KAMIS의 계란·우유 가격이 준비되어
+수행합니다. 현재 화면용 핵심 결과는 밀가루·설탕·버터·계란·우유를 각각 하나로
+묶은 품목 대표가격 예측입니다. 기존 세부유형, 개별 상품명, 브랜드, 지점 모델은
+분석 호환용으로 함께 유지합니다. FIS의 밀·설탕 선물과 KAMIS의 계란·우유 가격이 준비되어
 있으면 조사일 당시 공개된 값만 외부시장 특성으로 결합합니다.
 
 데이터 출처, 모델 입력, 성능 해석과 백엔드 JSON 계약은
 [ML 가격예측 파이프라인 문서](docs/ml-price-forecasting.md)에 정리되어 있습니다.
+백엔드에 전달할 품목 JSON 파일과 필드 의미는
+[백엔드 전달용 가격예측 JSON](docs/backend-forecast-json.md)에 정리되어 있습니다.
+`POST /predict`에서 저장 모델을 호출할 때 필요한 품목 모델, 피처 순서와 가격 복원식은
+[백엔드 ML 추론 연동 계약](docs/backend-ml-inference.md)에 정리되어 있습니다.
 
 ## 이번에 구현한 내용
 
-사용자가 먼저 마트 브랜드별 가격 추이를 비교하고, 브랜드를 선택하면 해당 브랜드의
-지점별 가격을 확인할 수 있도록 예측 단위를 확장했습니다.
+화면의 구매 타이밍 판단에 맞춰 품목 전체 대표가격 모델을 추가했습니다. 브랜드별
+현재가격은 DB에서 조회하고, 미래 비교가 필요하면 품목 예측 변동률을 공통 적용합니다.
 
 ```text
-상품 선택
-  -> 브랜드별 미래 가격 비교
-  -> 브랜드 선택
-  -> 해당 브랜드의 지점별 미래 가격 목록
-  -> 최저·평균·최고 지점을 차트나 표로 표시
+KCA 품목별 표준 단위가격 중앙값
+  + 밀가루·설탕 FIS / 계란·우유 KAMIS 외부시장 특성
+  -> 2·4·6·8주 직접 예측 모델을 각각 워크포워드 검증
+  -> 검증 기반 모델 혼합 또는 안전 기준선 전환
+  -> 대표가격·현재 대비 변동률
+  -> 하락확률 근사치·BUY / HOLD / WAIT 신호
 ```
 
 구현된 핵심 기능은 다음과 같습니다.
@@ -35,22 +41,25 @@
   조사된 가격 이력을 학습하여 `상품 × 브랜드 × 지점` 가격을 직접 예측합니다.
 - 지점마다 모델을 따로 만들지 않고 모든 지점 데이터를 하나의 글로벌 모델로
   학습하여 데이터가 적은 지점도 다른 지점의 공통 패턴을 활용합니다.
-- `ForecastHorizon`을 사용하면 여러 미래 조사 시점을 연속으로 예측합니다.
-  2단계부터는 직전 단계의 ML 예측값을 다음 단계 입력으로 사용합니다.
+- 화면용 품목 모델은 2·4·6·8주를 서로 직접 예측합니다. 이전 단계 예측을 다음 단계에
+  넣지 않으므로 재귀 오차가 누적되지 않습니다.
 - FIS는 밀가루·설탕, KAMIS는 계란·우유에 연결합니다. 계란 10구와 30구는
   `KRW/10ea`로 환산하며 미래 관측값이 과거 학습 행에 섞이지 않게 합니다.
-- 학습할 때 소매가격 이력 모델과 외부시장 특성을 추가한 모델을 같은 시간 구간에서
-  비교하고, sMAPE가 더 낮은 특성 구성을 예측 단위별로 자동 저장합니다.
-- 백엔드 전달용 JSON은 세부유형, 상품명, 브랜드, 지점의 네 종류로 생성합니다.
+- 품목 모델은 확장형 워크포워드 검증으로 소매 이력, FIS·KAMIS 추가 특성, 직전가
+  기준선을 비교합니다. 모델이 기준선을 이기지 못하면 해당 기간은 자동으로 안전
+  기준선으로 전환합니다.
+- 화면용 JSON은 `item_forecasts.json`이며 품목 5개의 대표가격, 변동률과 구매 신호를
+  제공합니다. 예측 하한·상한 구간은 전달하지 않습니다.
+- 기존 세부유형, 상품명, 브랜드, 지점 JSON도 분석 호환용으로 계속 생성합니다.
 
 현재 데이터에서는 상품·지점 시계열 9,615개 중 실제가격이 최소 6회 이상 있는
 9,083개를 지점 직접예측 대상으로 사용합니다. 3단계 예측을 실행하면 브랜드 예측
 618건과 지점 예측 27,249건이 생성됩니다.
 
-외부에 전달하는 미래 가격은 ML이 계산한 `modelPredictedUnitPrice`입니다. 마지막
-실제가격은 `currentUnitPrice` 또는 `lastActualUnitPrice`로 구분해 기준 시점 정보로만
-제공합니다. 직전 가격 유지값은 내부 백테스트 비교에만 사용하며 예측 CSV나 JSON에는
-포함하지 않습니다.
+외부에 전달하는 미래 가격은 검증을 통과한 모델과 안전 기준선을 혼합한
+`modelPredictedUnitPrice`입니다. 마지막 실제가격은 `currentUnitPrice` 또는
+`lastActualUnitPrice`로 구분합니다. 기준선 값은 별도 예측 필드로 중복 제공하지 않고,
+채택 방식은 `forecastMethod`와 `modelWeight`로 투명하게 표시합니다.
 
 지점 3단계 전체 JSON은 약 18MB이므로 실제 조회 API에서는 전체 파일을 한 번에
 반환하지 않고 상품, 브랜드, 예측 단계로 필터링한 뒤 페이지네이션해야 합니다.
@@ -90,7 +99,7 @@ python -m pip install -r requirements-lightgbm.txt
 .\run_local.ps1 -SkipProfiling -TrainModel
 ```
 
-최초 실행 또는 정기 재학습 시 세부유형, 상품명, 브랜드, 지점 가격예측 모델을
+최초 실행 또는 정기 재학습 시 품목, 세부유형, 상품명, 브랜드, 지점 가격예측 모델을
 모두 학습합니다.
 기본 학습기는 scikit-learn의 단일 프로세스 Gradient Boosting입니다.
 시간순 백테스트에서 학습 모델을 직전 가격 기준선과 비교하지만, 기준선은 성능
@@ -108,15 +117,15 @@ GitHub에 포함된 `data-pipeline/data/processed/fis/`와
 .\run_local.ps1 -SkipProfiling
 ```
 
-여러 조사 시점을 연속으로 예측하려면 재귀 예측 단계 수를 지정합니다. 2단계부터는
-직전 모델 예측값을 임시 가격 이력에 추가해 lag와 이동통계를 다시 계산합니다.
-예측값은 원천 데이터나 학습 데이터에 저장되지 않습니다.
+화면용 품목 예측 기간은 1~4단계로 지정합니다. 각 단계는 현재 실제 이력에서 약
+2·4·6·8주 가격을 직접 계산하며 예측값을 다음 단계 입력으로 사용하지 않습니다.
+분석 호환용 세부유형·상품·브랜드·지점 모델은 기존 재귀 방식을 유지합니다.
 
 ```powershell
-.\run_local.ps1 -SkipProfiling -ForecastHorizon 3
+.\run_local.ps1 -SkipProfiling -ForecastHorizon 4
 ```
 
-기본값은 `1`이며, 다단계 예측은 단계가 멀어질수록 오차가 누적될 수 있습니다.
+기본값은 `1`이고 최댓값은 `3`입니다.
 
 즉, `-TrainModel`은 최초 학습이나 의도한 정기 재학습 때만 사용합니다. 현재는
 자동 재학습 스케줄을 두지 않으며, 새 조사일 약 6개가 누적되는 시점(현재 수집
@@ -140,6 +149,15 @@ artifacts/
    ├─ dataset_summary.json
    ├─ baseline_metrics.json
    ├─ baseline_predictions.csv
+   ├─ item/                          # 화면용 품목 전체 대표가격 모델
+   │  ├─ model_dataset.csv
+   │  ├─ baseline_metrics.json
+   │  └─ model/
+   │     ├─ price_model.joblib
+   │     ├─ training_report.json
+   │     ├─ backtest_predictions.csv
+   │     ├─ prediction_report.json
+   │     └─ future_predictions.csv
    ├─ model/                         # 세부유형 대표가격 모델
    │  ├─ price_model.joblib
    │  ├─ training_report.json
@@ -169,6 +187,7 @@ artifacts/
    │     ├─ price_model.joblib
    │     └─ future_predictions.csv
    └─ backend/                       # 백엔드 API 요청 본문
+      ├─ item_forecasts.json         # 현재 화면용 핵심 전달 파일
       ├─ subtype_forecasts.json
       ├─ product_forecasts.json
       ├─ brand_forecasts.json
@@ -176,6 +195,7 @@ artifacts/
       └─ export_summary.json
 ```
 
+`ml/item/`은 상품과 판매점을 모두 합쳐 조사일별 중앙값을 만든 품목 전체 결과입니다.
 루트 `ml/model_dataset.csv`와 `ml/model/`은 품목·세부유형 단위 결과입니다.
 `ml/product/` 아래 결과는 동일 상품의 여러 판매점 가격을 조사일별 중앙값으로
 합친 상품명 단위 결과입니다.
@@ -197,6 +217,22 @@ python ml\scripts\build_model_dataset.py `
   --output-dir artifacts\ml `
   --fis-dir data-pipeline\data\processed\fis `
   --kamis-dir data-pipeline\data\processed\kamis
+
+python ml\scripts\evaluate_baselines.py `
+  --input artifacts\ml\item\model_dataset.csv `
+  --output-dir artifacts\ml\item `
+  --series-level item
+
+python ml\scripts\train_advanced_item_model.py `
+  --input artifacts\ml\item\model_dataset.csv `
+  --output-dir artifacts\ml\item\model `
+  --max-forecast-horizon 4
+
+python ml\scripts\predict_advanced_item_prices.py `
+  --input artifacts\ml\item\model_dataset.csv `
+  --model artifacts\ml\item\model\price_model.joblib `
+  --output-dir artifacts\ml\item\model `
+  --forecast-horizon 4
 
 python ml\scripts\evaluate_baselines.py `
   --input artifacts\ml\model_dataset.csv `
@@ -254,11 +290,16 @@ python ml\scripts\predict_prices.py `
   --forecast-horizon 3
 
 python ml\scripts\export_backend_forecasts.py `
+  --item-input artifacts\ml\item\model\future_predictions.csv `
   --subtype-input artifacts\ml\model\future_predictions.csv `
   --product-input artifacts\ml\product\model\future_predictions.csv `
   --brand-input artifacts\ml\brand\model\future_predictions.csv `
   --store-input artifacts\ml\store\model\future_predictions.csv `
   --output-dir artifacts\ml\backend
+
+python ml\scripts\evaluate_backtest_savings.py `
+  --artifact-root artifacts\ml `
+  --output artifacts\ml\backtest_business_metrics.json
 ```
 
 ### 테스트
@@ -281,6 +322,12 @@ docker compose up -d mysql
 ## 현재 상태와 제한
 
 - 원천 데이터 13개 파일에서 전체 25개 조사일을 확인했습니다.
+- 화면용 품목 전체 모델은 113행, 5개 시계열을 사용하며 4단계 실행 시
+  `item_forecasts.json`에 20건을 생성합니다.
+- 품목 고급 모델의 워크포워드 MAPE는 약 2주 `0.1796%`, 약 4주 `0.3267%`,
+  약 6주 `0.4801%`, 약 8주 `0.6554%`입니다. 현재 데이터에서는 직접 ML이 직전가
+  기준선을 이기지 못해 네 기간 모두 `validated_baseline_fallback`이 선택됐습니다. 새 데이터에서
+  ML이 개선되면 `modelWeight`가 자동으로 0보다 커집니다.
 - 세부유형 19개, 상품명 39개, 브랜드 222개, 상품·지점 9,615개 시계열을
   평가합니다.
 - 지점 466개를 구분하며 최소 6회 이상 관측된 상품·지점 시계열 9,083개를
@@ -289,6 +336,12 @@ docker compose up -d mysql
 - 현재 시간순 검증에서는 외부시장 특성이 지점 모델에서만 sMAPE를
   `1.5455%`에서 `1.4694%`로 낮춰 채택됐습니다. 세부유형·상품·브랜드 모델은
   소매가격 이력만 사용하도록 자동 선택됐습니다.
+- `evaluate_backtest_savings.py`는 상품·브랜드·지점 백테스트에서 MAPE와
+  구매 시점 모의 절감률을 계산합니다. 상승 예측이면 현재 구매하고, 그 외에는 다음
+  조사일까지 기다리는 전략을 `항상 현재 구매` 기준과 비교합니다.
+- 현재 지점 모델은 MAPE `1.5469%`, 동일 기준선 MAPE `1.2835%`, 모의 절감률
+  `0.2023%`입니다. 절감률은 각 행을 기준 단위 1개로 동일 가중한 실험값이며 실제
+  주문 수량, 재고, 배송비와 폐기 비용은 포함하지 않습니다.
 - FIS·KAMIS 검증 데이터의 마지막 날짜는 2026-07-31이므로 운영 전 최신 수집이
   필요합니다.
 - 기준 모델 평가는 파이프라인 검증용이며 서비스용 최종 예측 모델이 아닙니다.

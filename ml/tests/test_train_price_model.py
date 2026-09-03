@@ -4,7 +4,11 @@ import unittest
 
 import pandas as pd
 
-from ml.scripts.train_price_model import build_supervised_dataset, split_by_date
+from ml.scripts.train_price_model import (
+    build_supervised_dataset,
+    group_columns_for,
+    split_by_date,
+)
 
 
 class TrainPriceModelTest(unittest.TestCase):
@@ -98,6 +102,27 @@ class TrainPriceModelTest(unittest.TestCase):
         ].iloc[0]
         self.assertEqual(first_b["lag_1"], 5030)
         self.assertEqual(first_b["lag_4"], 5000)
+
+    def test_item_features_use_one_series_per_canonical_item(self) -> None:
+        supervised = build_supervised_dataset(
+            self.frame,
+            minimum_series_points=6,
+            series_level="item",
+        )
+
+        self.assertEqual(
+            set(supervised["canonical_item"]),
+            {"밀가루", "설탕"},
+        )
+        self.assertEqual(
+            group_columns_for("item"),
+            ["canonical_item", "unit_price_basis"],
+        )
+        flour = supervised.loc[
+            (supervised["canonical_item"] == "밀가루")
+            & (supervised["survey_date"] == pd.Timestamp("2026-02-26"))
+        ].iloc[0]
+        self.assertEqual(flour["lag_1"], 2030)
 
     def test_store_features_use_each_stores_direct_actual_prices(self) -> None:
         rows = []

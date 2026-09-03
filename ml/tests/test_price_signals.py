@@ -6,7 +6,6 @@ import numpy as np
 
 from ml.scripts.price_signals import (
     calculate_drop_probability,
-    calculate_prediction_interval,
     classify_price_signal,
     estimate_item_volatilities,
     enrich_predictions_with_signals,
@@ -29,12 +28,6 @@ class PriceSignalsTest(unittest.TestCase):
         prob = calculate_drop_probability(2000.0, 2100.0, volatility=0.03)
         self.assertLess(prob, 0.30)
         self.assertGreaterEqual(prob, 0.01)
-
-    def test_prediction_interval_bounds(self):
-        pred_low, pred_high = calculate_prediction_interval(2000.0, volatility=0.03, confidence_level=0.80)
-        self.assertLess(pred_low, 2000.0)
-        self.assertGreater(pred_high, 2000.0)
-        self.assertAlmostEqual((pred_low + pred_high) / 2.0, 2000.0, delta=1.0)
 
     def test_signal_classification_buy(self):
         # Rising price: drop_prob is low (e.g. 0.20), change is positive (+5%)
@@ -87,15 +80,17 @@ class PriceSignalsTest(unittest.TestCase):
             "current_median_unit_price": 2000.0,
             "model_predicted_unit_price": 2100.0,
             "model_predicted_change_percent": 5.0,
+            "forecast_horizon_step": 4,
         }])
         enriched = enrich_predictions_with_signals(pred_df)
-        self.assertIn("pred_low", enriched.columns)
-        self.assertIn("pred_high", enriched.columns)
+        self.assertNotIn("pred_low", enriched.columns)
+        self.assertNotIn("pred_high", enriched.columns)
         self.assertIn("drop_probability", enriched.columns)
         self.assertIn("signal", enriched.columns)
         self.assertIn("signal_message", enriched.columns)
         self.assertEqual(enriched.iloc[0]["signal"], "BUY")
         self.assertLess(enriched.iloc[0]["drop_probability"], 0.40)
+        self.assertIn("8주 뒤", enriched.iloc[0]["signal_message"])
 
 
 if __name__ == "__main__":
