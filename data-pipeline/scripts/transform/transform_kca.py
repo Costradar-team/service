@@ -74,7 +74,16 @@ def load_rules(path: Path) -> dict[str, Any]:
 
 def resolve_path(path_text: str) -> Path:
     path = Path(path_text)
-    return path if path.is_absolute() else ROOT / path
+    if path.is_absolute():
+        return path
+
+    cwd_candidate = Path.cwd() / path
+    root_candidate = ROOT / path
+    if cwd_candidate.exists():
+        return cwd_candidate
+    if root_candidate.exists():
+        return root_candidate
+    return cwd_candidate
 
 
 def path_for_report(path: Path) -> str:
