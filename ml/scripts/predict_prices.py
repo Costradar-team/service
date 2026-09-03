@@ -12,8 +12,10 @@ import pandas as pd
 
 try:
     from .external_market_features import EXTERNAL_FEATURE_COLUMNS
+    from .price_signals import enrich_predictions_with_signals
 except ImportError:
     from external_market_features import EXTERNAL_FEATURE_COLUMNS  # type: ignore[no-redef]
+    from price_signals import enrich_predictions_with_signals  # type: ignore[no-redef]
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_INPUT = REPO_ROOT / "artifacts" / "ml" / "model_dataset.csv"
@@ -282,6 +284,11 @@ def predict_prices(
         )
 
     output = pd.concat(output_frames, ignore_index=True)
+    output = enrich_predictions_with_signals(
+        output,
+        history_df=raw,
+        series_level=series_level,
+    )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     forecast_path = output_dir / FORECAST_FILENAME

@@ -143,6 +143,44 @@ class ExportBackendForecastsTest(unittest.TestCase):
                 store_payload["forecasts"][0],
             )
 
+    def test_exports_signals_and_probabilities(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            subtype_input = temp_path / "subtype.csv"
+            product_input = temp_path / "product.csv"
+            output_dir = temp_path / "backend"
+
+            row_with_signals = COMMON_ROW | {
+                "pred_low": "1950.0",
+                "pred_high": "2050.0",
+                "drop_probability": "0.6542",
+                "signal": "WAIT",
+                "signal_message": "2주 뒤 가격이 내릴 것으로 보입니다.",
+            }
+            self.write_csv(subtype_input, [row_with_signals])
+            self.write_csv(
+                product_input,
+                [row_with_signals | {"product_name": "곰표 밀가루(1kg)"}],
+            )
+
+            export_backend_forecasts(
+                subtype_input,
+                product_input,
+                output_dir,
+            )
+
+            subtype_payload = json.loads(
+                (output_dir / "subtype_forecasts.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            item = subtype_payload["forecasts"][0]
+            self.assertEqual(item["predLow"], 1950.0)
+            self.assertEqual(item["predHigh"], 2050.0)
+            self.assertEqual(item["dropProbability"], 0.6542)
+            self.assertEqual(item["signal"], "WAIT")
+            self.assertEqual(item["signalMessage"], "2주 뒤 가격이 내릴 것으로 보입니다.")
+
 
 if __name__ == "__main__":
     unittest.main()

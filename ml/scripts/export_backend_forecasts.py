@@ -50,6 +50,11 @@ OPTIONAL_COMMON_COLUMNS = [
     "recursive_input_unit_price",
     "recursive_input_source",
     "model_predicted_step_change_percent",
+    "pred_low",
+    "pred_high",
+    "drop_probability",
+    "signal",
+    "signal_message",
 ]
 NUMERIC_COLUMNS = {
     "current_median_unit_price",
@@ -58,6 +63,9 @@ NUMERIC_COLUMNS = {
     "model_predicted_change_percent",
     "recursive_input_unit_price",
     "model_predicted_step_change_percent",
+    "pred_low",
+    "pred_high",
+    "drop_probability",
 }
 INTEGER_COLUMNS = {"forecast_horizon_step"}
 JSON_FIELD_NAMES = {
@@ -77,6 +85,11 @@ JSON_FIELD_NAMES = {
     "recursive_input_unit_price": "recursiveInputUnitPrice",
     "recursive_input_source": "recursiveInputSource",
     "model_predicted_step_change_percent": "modelPredictedStepChangePercent",
+    "pred_low": "predLow",
+    "pred_high": "predHigh",
+    "drop_probability": "dropProbability",
+    "signal": "signal",
+    "signal_message": "signalMessage",
 }
 
 
