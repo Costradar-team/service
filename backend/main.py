@@ -139,7 +139,14 @@ def predict(body: PredictRequest) -> dict:
     if forecast is None:
         error(404, "NO_FORECAST", f"예측값이 없습니다: {body.item_name}")
     predicted = forecast["unit_price"]
-    signal, message, drop = signal_from_forecast(current, predicted)
+    if forecast.get("signal"):
+        signal = forecast["signal"]
+        message = forecast["message"]
+        drop = forecast.get("drop_probability")
+        if drop is None:
+            _, _, drop = signal_from_forecast(current, predicted)
+    else:
+        signal, message, drop = signal_from_forecast(current, predicted)
     return {
         "item_name": body.item_name,
         "brand": forecast["brand"] or body.brand,

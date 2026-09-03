@@ -2,7 +2,7 @@
 
 KCA 1차 FastAPI. 시세는 Docker MySQL `unit_price` 조회. 발주는 Notion 9/2 기준: 농협·이마트·롯데 브랜드 안에서 조합 TOP 3. 온라인 가정. 지점 분산 없음.
 
-예측 2주는 `data/brand_forecasts.json` (대원 PR #9 zip). store JSON은 넣지 않는다.
+예측 2주와 BUY/WAIT/HOLD는 `data/brand_forecasts.json` (승빈 신호 JSON). 품목 카드는 농협·이마트·롯데 행의 대표 신호.
 
 JWT, 저장 리스트, 지역 필터는 만들지 않는다.
 
@@ -29,10 +29,10 @@ uvicorn main:app --reload --port 8000
 | 주소 | 역할 |
 |------|------|
 | `GET /health` | 서버·DB |
-| `GET /signals` | 품목별 BUY / WAIT / HOLD |
+| `GET /signals` | 품목별 BUY / WAIT / HOLD. 신호는 brand JSON |
 | `GET /prices/history?item_name=밀가루` | 브랜드 평균 시계열 (`retailer.name`) |
 | `GET /prices/history?item_name=밀가루&brand=이마트` | 지점 표 + 최저/평균/최고 |
-| `POST /predict` | 2주 예측. 현재가는 DB, 예측은 brand JSON `modelPredictedUnitPrice` |
+| `POST /predict` | 2주 예측. 현재가는 DB, 예측가·신호는 brand JSON |
 | `POST /orders/quote` | 최근 조사일 전체 평균 단가 발주 금액 (기준선) |
 | `POST /optimize/basket` | 농협·이마트·롯데 조합 합계 TOP 3. `mode=today` 또는 `forecast` |
 

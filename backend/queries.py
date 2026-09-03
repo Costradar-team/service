@@ -23,9 +23,9 @@ BRAND_ALIASES = {
 }
 
 SIGNAL_MESSAGES = {
-    "BUY": "이번 조사일 기준 가격이 올랐습니다. 더 오르기 전에 사두면 유리합니다.",
-    "WAIT": "이번 조사일 기준 가격이 내렸습니다. 급할 필요 없습니다.",
-    "HOLD": "큰 변동은 없습니다. 필요할 때 사도 무방합니다.",
+    "BUY": "2주 뒤 가격이 오를 것으로 보입니다. 필요 수량을 미리 구매해 두는 것이 유리합니다.",
+    "WAIT": "2주 뒤 가격이 내릴 것으로 보입니다. 대량 구매를 미루고 관망하는 것을 권장합니다.",
+    "HOLD": "2주 뒤 유의미한 가격 변동이 예상되지 않습니다. 통상적인 주기에 맞춰 구매해도 무방합니다.",
 }
 
 ITEM_SQL = """
@@ -157,21 +157,31 @@ def build_signals() -> dict:
     items = []
     as_of = None
     for name in list_items():
-        series = item_means(name)
-        if not series:
+        latest = latest_unit_price(name)
+        if latest is None:
             continue
-        latest = series[-1]
-        prev = series[-2] if len(series) >= 2 else latest
-        signal = signal_from_change(prev["avg_price"], latest["avg_price"])
-        as_of = _iso(latest["survey_date"])
-        drop = 0.65 if signal == "BUY" else 0.55 if signal == "WAIT" else 0.40
+        survey_date, current = latest
+        as_of = survey_date
+        forecast = predicted_unit_price(name)
+        if forecast and forecast.get("signal"):
+            signal = forecast["signal"]
+            message = forecast["message"] or SIGNAL_MESSAGES.get(signal, SIGNAL_MESSAGES["HOLD"])
+            drop = forecast.get("drop_probability")
+            if drop is None:
+                drop = 0.65 if signal == "BUY" else 0.55 if signal == "WAIT" else 0.40
+        else:
+            series = item_means(name)
+            prev = series[-2] if len(series) >= 2 else series[-1]
+            signal = signal_from_change(prev["avg_price"], current)
+            message = SIGNAL_MESSAGES[signal]
+            drop = 0.65 if signal == "BUY" else 0.55 if signal == "WAIT" else 0.40
         items.append(
             {
                 "item_name": name,
-                "current_price": latest["avg_price"],
-                "survey_date": as_of,
+                "current_price": current,
+                "survey_date": survey_date,
                 "signal": signal,
-                "message": SIGNAL_MESSAGES[signal],
+                "message": message,
                 "drop_probability": drop,
             }
         )
