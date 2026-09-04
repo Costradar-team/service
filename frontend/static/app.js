@@ -89,12 +89,34 @@ const ITEMS = [
 ];
 const byId = id => ITEMS.find(x => x.id === id);
 
-/* 발주 리스트 초기 데이터 (사장님이 담아둔 상태 예시) — 이제 품목+수량만 (지점 안 쪼갬) */
-let myOrder = [
-  { itemId:"flour", qty:2 },
-  { itemId:"egg",   qty:1 },
-  { itemId:"milk",  qty:2 },
-];
+/* =====================================================================
+   장바구니(발주 담기) 저장 — 화면을 나가거나 새로고침해도 유지되도록
+   브라우저 localStorage에 저장해요. (쿠팡 등처럼 "담은 상태"가 유지됨)
+===================================================================== */
+const CART_KEY = "costradar_cart_v1";
+function loadCart(){
+  try {
+    const raw = localStorage.getItem(CART_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch(e){ console.warn("장바구니 불러오기 실패:", e); }
+  return []; // 처음 방문이면 빈 장바구니로 시작
+}
+function saveCart(){
+  try { localStorage.setItem(CART_KEY, JSON.stringify(myOrder)); }
+  catch(e){ console.warn("장바구니 저장 실패:", e); }
+}
+let myOrder = loadCart();
+
+/* 장바구니 아이콘 옆 숫자 배지 (상단 + 사이드바 둘 다) 갱신 */
+function updateCartBadge(){
+  const n = myOrder.reduce((sum,o) => sum + o.qty, 0);
+  ["cartBadgeTop","cartBadgeSide"].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = n;
+    el.hidden = n === 0;
+  });
+}
 
 /* 오늘/예측 모드 → 예측가는 today 가격에 fcFactor를 곱해 계산 (실제 API는 값을 직접 줌).
    하락 신호 품목은 예측이 더 싸고(<1), 상승 신호 품목은 조금 오름(>1). */
@@ -155,11 +177,6 @@ function renderHome(){
         <div class="prob ${colorClass}">가격 ${it.probKind} 확률 ${it.prob}%</div>
       </div>`;
   }).join("");
-  // 품목 바로가기는 전체 5개
-  document.getElementById("itemGrid").innerHTML = ITEMS.map(it => `
-      <div class="item-card" onclick="showDetail('${it.id}')">
-        <div class="ic"></div><div class="nm">${it.name}</div>
-      </div>`).join("");
 }
 
 /* =====================================================================
@@ -219,21 +236,36 @@ async function enhanceDetail(it){
   }catch(e){ console.warn("상세 API 폴백:", e); }
 }
 
+// 발주(POST /optimize/basket)가 쓰는 것과 똑같은 매핑 (백엔드 forecasts.py의 BASKET_BRANDS 기준)
+// "판매처별 최근 시세"도 온라인 구매 가정인 이 3개 브랜드로만 보여줘야, 발주 화면과 앞뒤가 맞음.
+// (그대로 두면 실데이터엔 편의점·백화점 등도 섞여 나와서 "지금 여기서 사세요" 문구와 안 맞았음)
+const BASKET_BRAND_MAP = {
+  "(주)농협유통": "농협", "(주)농협하나로유통": "농협",
+  "이마트": "이마트",
+  "롯데슈퍼": "롯데",
+};
+
 // /prices/history 응답 → 판매처 시세 + 차트(과거 실제 평균 + 예측 지점)로 변환
 function applyHistoryToItem(it, hist){
   const labels = hist.period_labels || hist.survey_dates || [];
   const n = labels.length;
   const brands = hist.brands || [];
   if(!n || !brands.length) return;
-  // 날짜별 브랜드 평균 = 실제 가격 선
+  // 날짜별 브랜드 평균 = 실제 가격 선 (여기는 시장 전체 평균 참고용이라 브랜드 제한 없이 그대로 둠)
   const mean = [];
   for(let i=0;i<n;i++){
     const col = brands.map(b => b.prices[i]).filter(v => v != null);
     mean.push(col.length ? Math.round(col.reduce((a,c)=>a+c,0)/col.length) : null);
   }
-  // 판매처별 시세 = 브랜드별 최근가 (싼 순)
-  it.liveQuotes = brands.map(b => ({ name:b.brand, price:b.latest_price }))
-                        .filter(q => q.price != null).sort((a,b)=>a.price-b.price);
+  // 판매처별 시세 = 농협·이마트·롯데 3곳만 (같은 브랜드 이름이 여러 개면 더 싼 쪽 사용)
+  const byBrand = {};
+  brands.forEach(b => {
+    const disp = BASKET_BRAND_MAP[b.brand];
+    if(!disp || b.latest_price == null) return;
+    if(!(disp in byBrand) || b.latest_price < byBrand[disp]) byBrand[disp] = b.latest_price;
+  });
+  it.liveQuotes = Object.entries(byBrand).map(([name,price]) => ({ name, price }))
+                        .sort((a,b)=>a.price-b.price);
   if(it.liveQuotes.length) it.liveQuotes[0].min = true;
   // 차트 = 과거 실제(평균) + 예측 지점(/predict)
   const p = it._predict;
@@ -251,7 +283,30 @@ function applyHistoryToItem(it, hist){
   it.liveChart = { labels:L, actual, center, lower, upper };
 }
 
+/* 실제/예측 값만 보고 y축 범위를 정함 (하한·상한 예측구간의 극단값 때문에
+   축이 확 늘어나서 실제 가격 변화가 안 보이는 문제 방지용).
+   "0부터 시작"이 아니라 데이터 범위에 여백만 살짝 둬서, 몇백 원 단위 변화도 보이게 함. */
+function niceAxisRange(values){
+  const v = values.filter(x => x != null);
+  if(!v.length) return { min:undefined, max:undefined };
+  let min = Math.min(...v), max = Math.max(...v);
+  if(min === max){ min -= min*0.05; max += max*0.05; }
+  const pad = Math.max((max - min) * 0.2, max * 0.01, 10);
+  const step = max >= 10000 ? 100 : max >= 1000 ? 50 : 10;
+  return {
+    min: Math.max(0, Math.floor((min - pad) / step) * step),
+    max: Math.ceil((max + pad) / step) * step
+  };
+}
+
 function renderDetailChart(it){
+  const errEl = document.getElementById("chartError");
+  // Chart.js가 CDN에서 안 불러와졌을 때(네트워크 차단 등) 빈 화면 대신 안내 문구를 보여줌
+  if (typeof Chart === "undefined"){
+    if (errEl) errEl.hidden = false;
+    return;
+  }
+  if (errEl) errEl.hidden = true;
   // 실시간 차트(liveChart)가 있으면 그걸, 없으면 가짜(chart) 사용
   const ch = it.liveChart || { labels:CHART_LABELS, actual:it.chart.actual, center:it.chart.center, lower:it.chart.lower, upper:it.chart.upper };
   const fColor = it.signal==="BUY" ? C.green : it.signal==="WAIT" ? C.amber : C.muted;
@@ -268,6 +323,8 @@ function renderDetailChart(it){
         backgroundColor:fBand, fill:"-1" },
     ]
   };
+  // y축 범위: 상/하한 예측구간은 빼고 실제·예측 값 기준으로만 계산 (변화가 잘 보이도록)
+  const yRange = niceAxisRange([...ch.actual, ...ch.center]);
   const options = {
     responsive:true, maintainAspectRatio:false,
     interaction:{ mode:"index", intersect:false },
@@ -275,7 +332,8 @@ function renderDetailChart(it){
       tooltip:{ callbacks:{ label:c => c.parsed.y==null?null:`${c.dataset.label}: ${won(c.parsed.y)}` } } },
     scales:{
       x:{ grid:{color:C.grid}, ticks:{color:C.muted} },
-      y:{ grid:{color:C.grid}, ticks:{color:C.muted, callback:v=>v.toLocaleString("ko-KR")} }
+      y:{ min:yRange.min, max:yRange.max, grid:{color:C.grid},
+          ticks:{color:C.muted, callback:v=>v.toLocaleString("ko-KR")} }
     }
   };
   if (detailChart) detailChart.destroy();
@@ -286,6 +344,7 @@ function renderDetailChart(it){
    (지점 안 쪼갬 → 품목+수량만 담아요) */
 function addToOrder(itemId){
   if (!myOrder.find(o => o.itemId === itemId)) myOrder.push({ itemId, qty:1 });
+  saveCart(); updateCartBadge();
   toast(`${byId(itemId).name} 발주에 담았어요`);
   showOrder();
 }
@@ -303,7 +362,7 @@ let orderMode = "today";
 /* =====================================================================
    [API] 백엔드 연결 층  ★ 실제 서버와 연결되는 부분 ★
    ---------------------------------------------------------------------
-   · USE_MOCK = true → 가짜 데이터만 사용 (시연용)
+   · USE_MOCK = 
    · USE_MOCK = false → 실제 API 시도, 실패하면 자동으로 가짜 데이터로 폴백
    백엔드를 로컬에서 켜고( 예: uvicorn ... ) 아래를 false 로 바꾸면 연결돼요.
    기본 주소는 http://127.0.0.1:8000 (Swagger 화면 기준)
@@ -435,11 +494,13 @@ async function renderOrder(){
             <button onclick="changeQty(${i},-1)">−</button>
             <span class="num">${o.qty}개</span>
             <button onclick="changeQty(${i},1)">+</button>
-          </span></div>
+          </span>
+          <button class="remove-btn" onclick="removeFromOrder(${i})" title="삭제">✕</button>
+        </div>
       </div>`).join("") || `<p class="muted" style="font-size:.85rem;">담은 품목이 없어요. 아래에서 추가해보세요.</p>`;
 
   document.getElementById("recSub").textContent =
-    `${orderMode==="today"?"오늘 기준":"2주 예측 기준"} · 한 브랜드에서 전부 구매할 때 합산 총액`;
+    `${orderMode==="today"?"최근 조사가 기준":"2주 예측 기준"} · 한 브랜드에서 전부 구매할 때 합산 총액`;
 
   // 오른쪽: 실제 API(POST /orders/auto) 시도 → 실패하면 가짜 계산으로 폴백
   let ranked;
@@ -465,11 +526,36 @@ async function renderOrder(){
       </div>`;
   }).join("");
 
+  // "최고가 대비 얼마 아꼈는지" 배지 — 브랜드가 2곳 이상 비교될 때만 보여줌
+  const savingsBadge = document.getElementById("savingsBadge");
+  if (savingsBadge){
+    const worst = ranked.length ? ranked[ranked.length-1].total : 0;
+    const best = ranked.length ? ranked[0].total : 0;
+    const savings = worst - best;
+    if (ranked.length >= 2 && savings > 0){
+      savingsBadge.textContent = `최고가 대비 -${won(savings)} 절감`;
+      savingsBadge.hidden = false;
+    } else {
+      savingsBadge.hidden = true;
+    }
+  }
+
   document.getElementById("orderBuyBtn").textContent = `${ranked[0].brand}에서 구매 (${won(ranked[0].total)})`;
 }
 
 function changeQty(i, d){
   myOrder[i].qty = Math.max(1, myOrder[i].qty + d);
+  saveCart(); updateCartBadge();
+  renderOrder();
+}
+
+/* 발주 리스트에서 품목 하나를 완전히 빼기 (수량 줄이기와 별개로 "취소" 기능) */
+function removeFromOrder(i){
+  const removed = myOrder[i];
+  if (!removed) return;
+  myOrder.splice(i, 1);
+  saveCart(); updateCartBadge();
+  toast(`${byId(removed.itemId).name} 삭제했어요`);
   renderOrder();
 }
 
@@ -486,4 +572,5 @@ document.getElementById("orderMode").addEventListener("click", e => {
 ===================================================================== */
 renderHome();
 go("home");
+updateCartBadge();  // 저장돼 있던 장바구니 개수 표시
 hydrate();   // USE_MOCK=false 이고 백엔드가 켜져 있으면 실제 신호로 최신화
