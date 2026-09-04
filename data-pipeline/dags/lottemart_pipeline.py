@@ -33,28 +33,30 @@ def run_python_script(script_path: str, *args: str) -> None:
     subprocess.run(command, cwd=PROJECT_ROOT, check=True)
 
 
+def run_xvfb_python_script(script_path: str, *args: str) -> None:
+    command = ["xvfb-run", "-a", sys.executable, str(DATA_PIPELINE_ROOT / script_path), *args]
+    print("Running command:", " ".join(command))
+    subprocess.run(command, cwd=PROJECT_ROOT, check=True)
+
+
 with DAG(
-    dag_id="cost_radar_kamis_daily_etl",
-    description="Run the existing KAMIS extract, transform, and load scripts daily.",
+    dag_id="cost_radar_lottemart_daily_etl",
+    description="Collect, transform, and load Lottemart ZETTA online prices daily.",
     default_args=DEFAULT_ARGS,
     start_date=datetime(2026, 9, 1, tzinfo=LOCAL_TZ),
-    schedule="30 3 * * *",
+    schedule="0 4 * * *",
     catchup=False,
     dagrun_timeout=timedelta(hours=2),
-    tags=["cost_radar", "kamis", "etl"],
+    tags=["cost_radar", "lottemart", "retailer", "etl"],
     user_defined_filters={"safe_run_id": safe_run_id},
-) as kamis_daily_etl:
+) as lottemart_daily_etl:
     extract = PythonOperator(
         task_id="extract",
-        python_callable=run_python_script,
+        python_callable=run_xvfb_python_script,
         op_args=[
-            "scripts/collect/collect_kamis.py",
-            "--start-date",
-            "{{ (data_interval_end - macros.timedelta(days=1)).strftime('%Y-%m-%d') }}",
-            "--end-date",
-            "{{ (data_interval_end - macros.timedelta(days=1)).strftime('%Y-%m-%d') }}",
+            "scripts/collect/collect_lottemart.py",
             "--output-dir",
-            "data/raw/kamis/dag_runs/{{ run_id | safe_run_id }}",
+            "data/raw/lottemart/dag_runs/{{ run_id | safe_run_id }}",
         ],
     )
 
@@ -62,12 +64,12 @@ with DAG(
         task_id="transform",
         python_callable=run_python_script,
         op_args=[
-            "scripts/transform/transform_kamis.py",
-            "data/raw/kamis/dag_runs/{{ run_id | safe_run_id }}",
+            "scripts/transform/transform_retailer.py",
+            "data/raw/lottemart/dag_runs/{{ run_id | safe_run_id }}",
             "--output-dir",
-            "data/processed/kamis/dag_runs/{{ run_id | safe_run_id }}",
-            "--report-dir",
-            "reports/transform/kamis/dag_runs/{{ run_id | safe_run_id }}",
+            "data/processed/retailer/lottemart/dag_runs/{{ run_id | safe_run_id }}",
+            "--report",
+            "reports/transform/lottemart/dag_runs/{{ run_id | safe_run_id }}/transform_summary.json",
         ],
     )
 
@@ -75,13 +77,13 @@ with DAG(
         task_id="load",
         python_callable=run_python_script,
         op_args=[
-            "scripts/load/load_kamis.py",
-            "--items",
-            "data/processed/kamis/dag_runs/{{ run_id | safe_run_id }}/kamis_item.csv",
-            "--observations",
-            "data/processed/kamis/dag_runs/{{ run_id | safe_run_id }}/kamis_price_observation.csv",
+            "scripts/load/load_retailer_mysql.py",
+            "--listing-input",
+            "data/processed/retailer/lottemart/dag_runs/{{ run_id | safe_run_id }}/retailer_product_listing.csv",
+            "--observation-input",
+            "data/processed/retailer/lottemart/dag_runs/{{ run_id | safe_run_id }}/retailer_price_observation.csv",
             "--report-dir",
-            "reports/load/kamis/dag_runs/{{ run_id | safe_run_id }}",
+            "reports/load/lottemart/dag_runs/{{ run_id | safe_run_id }}",
         ],
     )
 

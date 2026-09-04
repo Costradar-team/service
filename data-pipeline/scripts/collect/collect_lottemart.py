@@ -4,6 +4,7 @@ import argparse
 import csv
 import json
 import logging
+import os
 import re
 from datetime import datetime
 from pathlib import Path
@@ -558,7 +559,7 @@ def deduplicate_across_products(rows: list[dict[str, Any]]) -> list[dict[str, An
     return deduped
 
 
-def collect_products(output_dir: Path, product_keys: list[str], max_pages: int, api_page_size: int) -> dict[str, Any]:
+def collect_products(output_dir: Path, product_keys: list[str], max_pages: int, api_page_size: int, headless: bool = False) -> dict[str, Any]:
     try:
         from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
         from playwright.sync_api import sync_playwright
@@ -571,7 +572,13 @@ def collect_products(output_dir: Path, product_keys: list[str], max_pages: int, 
     collected_rows: list[dict[str, Any]] = []
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(channel="chrome", headless=False)
+        executable_path = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE")
+        launch_options: dict[str, Any] = {"headless": headless}
+        if executable_path:
+            launch_options["executable_path"] = executable_path
+        else:
+            launch_options["channel"] = "chrome"
+        browser = playwright.chromium.launch(**launch_options)
         context = browser.new_context(locale="ko-KR")
         page = context.new_page()
         response = page.goto(HOME_URL, wait_until="domcontentloaded", timeout=60000)
@@ -594,6 +601,12 @@ def collect_products(output_dir: Path, product_keys: list[str], max_pages: int, 
         browser.close()
 
     rows = deduplicate_across_products(collected_rows)
+    if not rows:
+        api_statuses = [summary.get("search_api_status") for summary in summaries]
+        raise RuntimeError(
+            "Lottemart ZETTA collection returned zero products; raw CSV was not written "
+            f"(search_api_statuses={api_statuses})."
+        )
     path = combined_output_path(output_dir, collected_at)
     write_rows(path, rows)
     logger.info(
@@ -606,8 +619,8 @@ def collect_products(output_dir: Path, product_keys: list[str], max_pages: int, 
     return {
         "execution_environment": {
             "playwright": "python",
-            "channel": "chrome",
-            "headless": False,
+            "channel": "chromium" if executable_path else "chrome",
+            "headless": headless,
             "profile": "ephemeral new_context",
             "logged_in": False,
             "captcha_or_stealth": False,
@@ -634,6 +647,7 @@ def main() -> int:
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     parser.add_argument("--max-pages", type=int, default=DEFAULT_MAX_PAGES, help="0 means follow all API page tokens.")
     parser.add_argument("--api-page-size", type=int, default=DEFAULT_API_PAGE_SIZE)
+    parser.add_argument("--headless", action="store_true", help="Run the browser without a display (required in containers).")
     args = parser.parse_args()
     if args.max_pages < 0:
         parser.error("--max-pages must be greater than or equal to zero.")
@@ -645,6 +659,7 @@ def main() -> int:
         args.product,
         args.max_pages,
         args.api_page_size,
+        args.headless,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0

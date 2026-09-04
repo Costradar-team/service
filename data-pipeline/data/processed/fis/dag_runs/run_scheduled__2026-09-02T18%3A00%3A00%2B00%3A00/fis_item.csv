@@ -1,0 +1,3 @@
+﻿item_key,canonical_item,cmdt_id,cmdt_se_cd,item_name,price_unit,converted_unit,relation_type
+wheat_srw,밀가루,0601000002001103,CORN,소맥(SRW),US¢/bu,USD/ton,UPSTREAM_RAW_MATERIAL
+white_sugar,설탕,0701000002011303,FOOD,White Sugar,USD/ton,USD/ton,SAME_COMMODITY

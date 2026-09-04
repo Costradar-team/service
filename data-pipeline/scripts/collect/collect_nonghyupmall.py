@@ -5,6 +5,7 @@ import csv
 import json
 import logging
 import math
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -406,7 +407,7 @@ def write_rows(path: Path, rows: list[dict[str, str]]) -> None:
         writer.writerows(rows)
 
 
-def collect_products(product_keys: list[str], output_dir: Path, max_pages: int, list_size: int) -> dict[str, Any]:
+def collect_products(product_keys: list[str], output_dir: Path, max_pages: int, list_size: int, headless: bool = False) -> dict[str, Any]:
     try:
         from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
         from playwright.sync_api import sync_playwright
@@ -418,7 +419,13 @@ def collect_products(product_keys: list[str], output_dir: Path, max_pages: int, 
     collected_rows: list[dict[str, str]] = []
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(channel="chrome", headless=False)
+        executable_path = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE")
+        launch_options: dict[str, Any] = {"headless": headless}
+        if executable_path:
+            launch_options["executable_path"] = executable_path
+        else:
+            launch_options["channel"] = "chrome"
+        browser = playwright.chromium.launch(**launch_options)
         context = browser.new_context(locale="ko-KR")
         page = context.new_page()
         home_response = page.goto(MAIN_URL, wait_until="domcontentloaded", timeout=PLAYWRIGHT_TIMEOUT_MS)
@@ -450,8 +457,8 @@ def collect_products(product_keys: list[str], output_dir: Path, max_pages: int, 
     return {
         "execution_environment": {
             "playwright": "python",
-            "channel": "chrome",
-            "headless": False,
+            "channel": "chromium" if executable_path else "chrome",
+            "headless": headless,
             "profile": "ephemeral new_context",
             "logged_in": False,
             "captcha_or_stealth": False,
@@ -472,6 +479,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-pages", type=int, default=DEFAULT_MAX_PAGES, help="0 means collect all detected pages.")
     parser.add_argument("--list-size", type=int, default=DEFAULT_LIST_SIZE)
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    parser.add_argument("--headless", action="store_true", help="Run the browser without a display (required in containers).")
     args = parser.parse_args()
     if args.max_pages < 0:
         parser.error("--max-pages must be greater than or equal to zero.")
@@ -488,6 +496,7 @@ def main() -> int:
         output_dir=resolve_path(args.output_dir),
         max_pages=args.max_pages,
         list_size=args.list_size,
+        headless=args.headless,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0

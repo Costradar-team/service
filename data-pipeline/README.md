@@ -154,8 +154,22 @@ data-pipeline\data\raw\emart\emart_all_{collect_date}.csv
 
 ## Airflow
 
-`docker-compose.yml`의 Airflow 서비스는 `data-pipeline/dags`의 DAG를 읽어 KAMIS/FIS 일 단위 ETL과
-KCA 월 단위 ETL을 실행한다. Airflow 컨테이너는 시작 시 루트 `requirements.txt`를 설치한다.
+`docker-compose.yml`의 Airflow 서비스는 `data-pipeline/dags`의 DAG를 읽어 KAMIS/FIS, 롯데마트,
+농협몰 일 단위 ETL과 KCA 월 단위 ETL을 실행한다. Airflow 컨테이너는 시작 시 루트
+`requirements.txt`를 설치한다.
+
+롯데마트와 농협몰 수집기는 Playwright 및 Chromium을 사용한다. Compose는 `Dockerfile.airflow`로
+Chromium, Playwright, Xvfb를 포함한 Airflow 커스텀 이미지를 빌드한다. 농협몰은 headless Chromium으로,
+롯데마트는 `xvfb-run`을 통한 headful Chromium으로 실행한다. DAG는 소스별 raw/processed/report 경로를
+분리해 서로의 실행 결과를 덮어쓰지 않는다.
+
+### 0건 수집 정책
+
+현재 KCA, FIS, 농협몰 수집기는 요청 자체가 성공했고 수집 결과만 0건인 경우 성공으로 처리한다.
+빈 raw 파일과 그 Run 전용 processed 결과가 남으며, load는 빈 입력에 대해 기존 데이터를 삭제하지 않는
+upsert 방식으로 동작한다. 이 정책은 수집 장애를 자동으로 판정하지 않으므로 DAG 실행 로그와 수집 건수를
+모니터링해야 한다. 롯데마트는 0건이면 raw를 쓰지 않고 task를 실패시키며, KAMIS는 API 또는 상품별 수집
+오류가 하나라도 있으면 task를 실패시킨다.
 
 루트 `.env`에 아래 값이 필요하다.
 

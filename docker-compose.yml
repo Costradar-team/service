@@ -19,13 +19,17 @@ services:
       - ./backend/sql:/docker-entrypoint-initdb.d:ro
 
   airflow:
-    image: apache/airflow:2.10.5-python3.12
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
+    image: cost-radar-airflow:headful
     container_name: cost-radar-airflow
     restart: unless-stopped
     depends_on:
       - mysql
     ports:
       - "8081:8080"
+    shm_size: 1gb
     env_file:
       - .env
     environment:
@@ -39,6 +43,7 @@ services:
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
       DATABASE_URL: mysql+pymysql://${MYSQL_USER}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE}?charset=utf8mb4
+      PLAYWRIGHT_CHROMIUM_EXECUTABLE: /usr/bin/chromium
     volumes:
       - .:/opt/cost_radar
       - airflow_home:/opt/airflow
