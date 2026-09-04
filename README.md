@@ -1,329 +1,446 @@
-# CostRadar
+# 🛒 원가레이더 (CostRadar)
 
-개인 카페의 원재료 가격을 정제하고, 품목별 가격 추이와 구매 시점 판단에
-사용할 모델링 데이터셋을 만드는 프로젝트입니다.
+> **개인 디저트 카페 사장님을 위한 식자재 원가 예측 · 구매 타이밍 최적화 서비스**
+>
+> **“지금 사야 유리한가?”와 “어디서 사야 최저가인가?”에 데이터로 답합니다.**
 
-현재 데이터 파이프라인은 한국소비자원 생필품 가격 CSV에서 밀가루, 설탕,
-버터, 계란, 우유를 선별합니다. 로컬 실행 파이프라인은 원천 데이터 품질 검사,
-품목 매핑, 단위가격 표준화, 날짜별 대표가격 생성, 기준 모델 평가를 순서대로
-수행합니다. 예측 결과는 세부유형, 개별 상품명, 브랜드, 지점 실제가격의 네 가지
-단위로 생성합니다. FIS의 밀·설탕 선물과 KAMIS의 계란·우유 가격이 준비되어
-있으면 조사일 당시 공개된 값만 외부시장 특성으로 결합합니다.
+---
 
-데이터 출처, 모델 입력, 성능 해석과 백엔드 JSON 계약은
-[ML 가격예측 파이프라인 문서](docs/ml-price-forecasting.md)에 정리되어 있습니다.
+## 📑 목차
 
-## 이번에 구현한 내용
+1. [프로젝트 개요](#1-프로젝트-개요)
+2. [핵심 기능](#2-핵심-기능)
+3. [시스템 아키텍처](#3-시스템-아키텍처)
+4. [데이터 파이프라인 아키텍처](#4-데이터-파이프라인-아키텍처)
+5. [AI 모델링](#5-ai-모델링)
+6. [사용자 동선](#6-사용자-동선)
+7. [API 명세](#7-api-명세)
+8. [기술 스택](#8-기술-스택)
+9. [주차별 진행 상황](#9-주차별-진행-상황-wbs-실적)
+10. [트러블슈팅](#10-트러블슈팅)
+11. [성과 & 백테스트](#11-성과--백테스트)
+12. [실행 방법](#12-실행-방법)
+13. [팀 & 역할](#13-팀--역할)
+14. [폴더 구조](#14-폴더-구조)
+15. [향후 발전 방향](#15-향후-발전-방향)
 
-사용자가 먼저 마트 브랜드별 가격 추이를 비교하고, 브랜드를 선택하면 해당 브랜드의
-지점별 가격을 확인할 수 있도록 예측 단위를 확장했습니다.
+---
+
+## 1. 프로젝트 개요
+
+### 문제 정의
+
+대기업과 달리 **별도의 구매팀이 없는 개인 디저트 카페 사장님**은 식자재를 언제, 어디서 구매할지 경험과 감에 의존해 결정하는 경우가 많습니다. 하지만 카페 시장은 이미 높은 경쟁과 폐업 위험에 노출되어 있으며, 식자재 원가 관리의 중요성도 계속 커지고 있습니다.
+
+- 전국 카페 약 **93,000개** · 연 폐업률 **14.1%**
+- 서울 카페 5년 생존율 **34.9%**
+- **식자재비는 카페 운영비의 약 30~40%** → 원가 관리가 곧 수익성과 직결
+
+### 왜 예측이 필요한가
+
+원재료 국제 가격과 실제 소비자 가격은 같은 방향으로 움직이지 않을 수 있어, 단순한 체감만으로 구매 시점을 판단하기 어렵습니다.
+
+- 2022~2025년 밀 원재료 국제가는 **15% 하락**했지만 국내 밀가루 소비자가는 **20.3% 상승**
+- 같은 기간 설탕 소비자가는 **37% 상승**, 유지류 국제가는 1년 사이 **22.7% 상승**
+
+### 서비스가 답하는 2가지 질문
+
+| 질문 | 기능 |
+| --- | --- |
+| **① 지금 사야 유리한가?** | `BUY / WAIT / HOLD` 구매 타이밍 신호 제공 |
+| **② 어떤 구매처 조합이 최저가인가?** | 브랜드 단위 합산 최저가 **TOP 3** 발주 조합 추천 |
+
+---
+
+## 2. 핵심 기능
+
+- **3단계 구매 신호** — `BUY`(선구매) / `WAIT`(관망) / `HOLD`(통상 구매), 하락 확률 기반 판단
+- **발주 최적화** — 온라인 배송을 가정하고, 품목마다 판매처를 지나치게 분산하지 않도록 **브랜드 단위 합산 최저가 TOP 3** 추천
+- **절감액 가시화** — 최고가 대비 절감 가능한 금액을 `-N원 절감` 형태로 표시
+
+### MVP 범위 & 현실을 반영한 설계 기준
+
+| 구분 | 내용 |
+| --- | --- |
+| **MVP 품목 5종** | 장기: 밀가루·설탕·버터 (**2~4주 예측**) / 단기: 계란·우유 (**1~2주 예측**) |
+| **의도적 제외** | 로그인·JWT, 발주 저장, 지역 필터, 날씨·공휴일 변수 |
+| **제외 이유** | 4주 안에 예측과 구매 최적화라는 핵심 가설을 검증하기 위해 부가 기능을 최소화 |
+
+---
+
+## 3. 시스템 아키텍처
+
+화면 제공, API 처리, 데이터 저장의 역할을 분리해 각 계층의 책임을 명확히 하고 변경 영향 범위를 줄이기 위해 **3-Tier 구조**를 적용했습니다.
+
+Flask는 화면 리소스(HTML/CSS/JS)를 제공하고, 브라우저는 FastAPI를 통해 필요한 데이터를 조회합니다. FastAPI는 MySQL의 서비스 데이터와 사전에 생성된 예측 결과를 조회해 JSON 형태로 제공합니다.
+
+```mermaid
+flowchart LR
+    DS["데이터 소스<br/>KCA · KAMIS · FIS<br/>롯데마트 · 농협몰"]
+    AF["Airflow<br/>주기적 수집 · Transform · Load"]
+
+    U["👤 사용자 브라우저"]
+    FL["Flask :5001<br/>HTML · CSS · JS · Chart.js"]
+    API["FastAPI :8000<br/>주문 · 조회 API"]
+    DB[("MySQL :3307<br/>정규화 12 tables")]
+    JSON["brand_forecasts.json<br/>예측 결과<br/>(학습 · 추론 분리)"]
+
+    DS -->|"데이터 수집"| AF
+    AF -->|"정제 · 적재"| DB
+
+    U -->|"① 페이지 요청"| FL
+    FL -->|"HTML 반환"| U
+
+    U -->|"② 데이터 요청 (JSON)"| API
+    API -->|"시세 조회"| DB
+    API -->|"예측 · 신호 로드"| JSON
+```
+
+<!-- TODO: 포트폴리오용 아키텍처 다이어그램 이미지 완성 후 아래 주석 해제
+
+![시스템 아키텍처](docs/architecture.png)
+
+-->
+
+---
+
+## 4. 데이터 파이프라인 아키텍처
+
+Airflow를 기반으로 각 데이터 소스의 업데이트 주기에 맞춰 수집 작업을 자동화하고, 원본 데이터를 실행 단위로 보관한 뒤 정제·매핑 과정을 거쳐 MySQL에 적재합니다.
+
+```mermaid
+flowchart LR
+    subgraph SRC["수집 소스 (5종)"]
+        KCA["KCA 참가격<br/>예측 타깃"]
+        FIS["FIS 국제선물<br/>선행지표"]
+        KAMIS["KAMIS 소매<br/>계란 · 우유"]
+        ON["농협몰 · 롯데마트<br/>온라인 현재가 크롤링"]
+        KAKAO["카카오 Local<br/>매장 지역 매핑"]
+    end
+
+    SCH["Airflow Scheduler<br/>소스별 주기 설정"]
+    RAW[("Raw Snapshot<br/>3.07M+ rows")]
+    PRE["전처리 · 정규화<br/>canonical_item 매핑"]
+    MYSQL[("MySQL<br/>12 tables")]
+    TRAIN["AI 학습<br/>Gradient Boosting"]
+    FC["brand_forecasts.json"]
+
+    SRC --> SCH --> RAW --> PRE --> MYSQL
+    MYSQL --> TRAIN --> FC
+```
+
+### 데이터 규모
+
+| 지표 | 규모 | 의미 |
+| --- | ---: | --- |
+| **전체 Raw** | **3.07M+ rows** | KCA · FIS · KAMIS · 농협몰 · 롯데마트 통합 |
+| **KCA 참가격** | 204,036 obs | 39개 상품 · 466개 매장 · 5개 표준 품목, 예측 타깃 |
+| **FIS** | 511건 | 밀 · 설탕 2개 원자재의 국제 선물가 |
+| **KAMIS** | 3,291건 | 계란 · 우유 2개 품목의 소매 가격 |
+| **온라인 현재가** | 1,336 listings | 농협몰 1,057 + 롯데마트 279 |
+| **지역 매칭** | 462 / 462 | 적용 가능 지점 100% 매칭, 전체 466개 기준 99.1% |
+
+> **수집 기간:** 각 데이터 소스 기준 약 1년
+>
+> KCA `2025.07~2026.07` · FIS `2025.08~2026.07` · KAMIS `2025.05~2026.07`
+
+### ERD
+
+- **표준 품목:** `canonical_item`
+- **과거 가격:** `product`, `store`, `price_observation`
+- **외부 예측 지표:** `fis_*`, `kamis_*`
+- **온라인 현재가:** `retailer_product_listing`, `retailer_price_observation`
+
+```mermaid
+erDiagram
+    canonical_item ||--o{ product : has
+    canonical_item ||--o{ fis_item : maps
+    canonical_item ||--o{ kamis_item : maps
+
+    product ||--o{ price_observation : records
+    store ||--o{ price_observation : records
+    retailer ||--o{ store : owns
+    region ||--o{ store : locates
+
+    product ||--o{ retailer_product_listing : listed
+    retailer_product_listing ||--o{ retailer_price_observation : records
+
+    fis_item ||--o{ fis_price_observation : records
+    kamis_item ||--o{ kamis_price_observation : records
+```
+
+<!-- TODO: 전체 ERD 이미지가 있으면 아래 주석 해제
+
+![ERD](docs/erd/erd.png)
+
+-->
+
+### 입력 / 출력
+
+- **Input**
+  - FIS · KAMIS 거시 지표
+  - 소매 시계열 `lag_1/2/4`
+  - 이동평균 · 이동표준편차
+  - 월 계절성 `sin/cos`
+- **Output**
+  - 2주 뒤 브랜드별 품목 단위당 중위가격
+  - 학습 타깃: 직전 대비 가격 변동률
+
+### 의사결정 로직
+
+정규분포 CDF와 `erf`를 이용해 하락 확률을 산출하고, 예측 변동률과 함께 구매 신호를 결정합니다.
+
+| 신호 | 조건 | 의미 |
+| --- | --- | --- |
+| **BUY** | 하락확률 ≤ 45% **AND** 2주 변동률 ≥ +1.5% | 가격 상승 가능성이 높음 → 선구매 |
+| **WAIT** | 하락확률 ≥ 55% **AND** 2주 변동률 ≤ -1.5% | 가격 하락 가능성이 높음 → 관망 |
+| **HOLD** | 변동폭 ±1.5% 이내 또는 확률 45~55% | 큰 변동 없음 → 통상 구매 |
+
+---
+
+## 6. 사용자 동선
+
+```mermaid
+flowchart TD
+    H["🏠 홈 대시보드<br/>5개 품목 BUY / WAIT / HOLD 신호 카드"]
+    G["ℹ️ 신호 기준 안내"]
+    D["📈 품목 상세<br/>하락 확률 · 예측 그래프 · 판매처 시세"]
+    B["🧾 발주 리스트<br/>브랜드 합산 TOP 3 · 절감액 배지"]
+
+    H -->|"카드 클릭"| D
+    H -->|"신호 기준"| G
+    D -->|"발주에 담기"| B
+    B -->|"오늘 구매 / 2주 예측 토글"| B
+```
+
+<!-- TODO: 화면 캡처를 docs/screenshots/ 에 넣고 주석 해제
+
+| 홈 대시보드 | 품목 상세 | 발주 리스트 |
+| --- | --- | --- |
+| ![home](docs/screenshots/home.png) | ![detail](docs/screenshots/detail.png) | ![order](docs/screenshots/order.png) |
+
+-->
+
+---
+
+## 7. API 명세
+
+> Swagger: `http://127.0.0.1:8000/docs`
+
+| 메서드 | 엔드포인트 | 하는 일 | 연결 화면 |
+| --- | --- | --- | --- |
+| `GET` | `/health` | 서버 · DB · 예측 파일 상태 확인 | 상단 연결 배너 |
+| `GET` | `/signals` | 품목별 `BUY / WAIT / HOLD` 신호 조회 | 홈 대시보드 |
+| `GET` | `/prices/history?item_name=` | 브랜드 평균 가격 시계열 조회 | 품목 상세 |
+| `GET` | `/prices/history?item_name=&brand=` | 지점별 가격표 + 최저/평균/최고 조회 | 품목 상세 |
+| `POST` | `/predict` | 2주 예측 결과 조회<br/>현재가=DB, 예측가·신호=JSON | 상세 BUY 카드 |
+| `POST` | `/orders/quote` | 최근 조사일 평균 단가 조회, 절감액 계산 기준선 제공 | 발주 절감 계산 |
+| `POST` | `/optimize/basket` | 브랜드 조합 최저가 TOP 3 계산<br/>`mode=today \| forecast` | 발주 리스트 |
+
+---
+
+## 8. 기술 스택
+
+| 영역 | 사용 기술 |
+| --- | --- |
+| **데이터 엔지니어링** | Python, Airflow, Playwright, Chromium, Xvfb, xauth, SQLAlchemy Core |
+| **AI / ML** | scikit-learn (Gradient Boosting Regressor), pandas, numpy |
+| **백엔드** | FastAPI, MySQL 8 |
+| **프론트엔드** | Flask, Jinja2, Vanilla JS, Chart.js |
+| **인프라** | Docker, Docker Compose |
+| **협업 도구** | GitHub, Swagger |
+
+<!-- TODO: AWS 배포·CI/CD를 실제로 구성했다면 인프라 항목에 추가 -->
+
+---
+
+## 9. 주차별 진행 상황 (WBS 실적)
+
+### 1주차 — 기획 · 데이터 파이프라인 구축 · AI 모델링 · 백엔드 인프라 구성
+
+- 서비스 요구사항 정의서 및 화면 와이어프레임 작성
+  - 홈 · 상세 · 발주 · 신호 기준 4개 화면
+- 공공데이터 및 외부 데이터 수집 스크립트 구현
+  - KCA 참가격 · FIS · KAMIS · 카카오 Local
+  - 온라인 크롤링: 농협몰 · 롯데마트
+- Airflow 기반 배치 수집 자동화
+- MySQL 12개 테이블 설계 및 ERD 작성
+- 전처리 파이프라인 구현
+  - One-Hot Encoding
+  - 466개 지점 Target Encoding
+  - 시계열 피처 가공
+- 가격 예측 모델 개발
+  - **Gradient Boosting Regressor** 기반 글로벌 단일 모델
+  - LightGBM 경량화 옵션 병행 구현
+- FastAPI 기본 엔드포인트 설계
+  - `/signals`
+  - `/predict`
+  - `/optimize/basket`
+
+### 2주차 — AI 모델 고도화 · 풀스택 연동 · 테스트 · 배포 및 발표 준비
+
+- 발주 최적화 로직 구현
+  - 브랜드 합산 최저가 TOP 3
+- `BUY / WAIT / HOLD` 의사결정 로직 구현
+- 학습과 추론 분리
+  - 예측 결과를 `brand_forecasts.json`으로 서빙해 운영 안정성 확보
+- 프론트엔드 UI 개발
+  - Flask + Jinja2 + Chart.js
+  - 홈 · 상세 · 발주 3개 주요 화면 구현
+- 백엔드-프론트 API 연동
+  - 브라우저가 FastAPI를 직접 호출해 JSON 바인딩
+  - 미연결 시 예시 데이터 자동 fallback
+- 통합 테스트 및 예외 처리
+  - **백엔드 미연결 시 화면 공백** → 예시 데이터 자동 fallback + 연결 상태 배너로 UX 보완
+  - **Chart.js 그래프 미표시** → 외부 CDN 대신 프로젝트 내부 파일로 전환
+- 백테스트 검증
+  - 시간순 홀드아웃
+  - 절감률 산출
+- Docker Compose 기반 멀티 컨테이너 구성
+- 포트폴리오용 시스템 아키텍처 및 최종 발표 자료 제작
+
+<!-- TODO: AWS·CI/CD를 실제로 구성했다면 위 항목에 추가 -->
+
+---
+
+## 10. 트러블슈팅
+
+| 문제 | 원인 | 해결 |
+| --- | --- | --- |
+| **참가격 API 호출 제한** | 개발 계정 트래픽 2,000회 제한 | 실시간 호출 대신 **주기적 배치 수집**으로 전환하고, 1년치 스냅샷을 사전에 확보 |
+| **적재 중 오류 발생 시 데이터 정합성 문제** | 적재 도중 오류가 발생하면 일부 데이터만 반영될 가능성 | 부모 → 자식 순서로 적재하고 부모 실패 시 즉시 중단. **Batch 실패 데이터는 별도 CSV로 보관 후 원인 확인 및 재적재** |
+| **데이터 소스별 수집 주기 차이** | 각 데이터 소스의 업데이트 주기가 서로 다름 | **Airflow Scheduler**로 소스별 주기 설정. `run_id`로 실행별 Raw 원본을 분리하고 UNIQUE 제약으로 중복 적재 방지 |
+| **단순 예측 가격의 한계** | 예상 가격만으로는 실제 구매 시점을 판단하기 어려움 | 과거 변동성을 기반으로 **하락 확률과 80% 신뢰구간**을 계산해 `BUY / WAIT / HOLD` 신호 제공 |
+| **제로 분모 및 시장 노이즈** | 변동성 0 계산 오류와 1~2원 수준의 미세 변동에도 신호가 발생 | **최소 변동성 1.5%** 적용 + 변동률·확률 이중 임계값으로 미세 변동은 `HOLD` 처리 |
+| **프론트–API 연동 실패** | Flask 화면과 FastAPI 서버가 서로 다른 포트를 사용해 **CORS 차단** 발생 | Flask는 화면을 렌더링하고 브라우저가 FastAPI를 직접 호출하도록 구성. FastAPI CORS 설정에 `:5001` Origin 허용 |
+| **발주 추천 결과 분산** | 품목별 최저가만 선택하면 여러 판매처로 주문이 분산됨 | 농협몰 · 롯데마트를 **판매처 단위 총 구매비용**으로 비교해 최소 비용 조합 추천 |
+| **상품 가격 비교 왜곡** | 1kg, 900g처럼 용량이 다른 상품을 판매가만으로 비교하면 실제 가격 비교가 왜곡됨 | `unit_price`를 계산해 **kg / L / 10개 기준 단위가격으로 정규화**한 뒤 비교 |
+| **그래프 미표시** | Chart.js를 외부 CDN에 의존해 네트워크 상태에 따라 로딩 실패 | Chart.js를 **프로젝트 내부에 포함**해 외부 네트워크 없이 그래프 표시 |
+| **API 미연결 시 빈 화면** | API 서버 응답 실패 시 화면에 표시할 데이터가 없음 | **예시 데이터 자동 fallback** + 배너를 통해 실시간 데이터 / fallback 상태 표시 |
+
+---
+
+## 11. 성과 & 백테스트
+
+### 예측 성능
+
+> 시간순 홀드아웃 · 브랜드 모델 Test 966건 기준
+
+| 지표 | 값 |
+| --- | ---: |
+| **sMAPE** | **0.90%** |
+| **MAPE** | 0.97% |
+| **MAE** | 40.13원 |
+| **RMSE** | 229.49원 |
+
+**품목별 sMAPE / MAE**
+
+- 계란: **0.29% / 16.16원**
+- 버터: **0.50% / 124.04원**
+- 설탕: **0.55% / 19.84원**
+- 우유: **0.95% / 37.08원**
+- 밀가루: **1.56% / 29.01원**
+
+### 백테스트 절감률
+
+> 시장 평균가 대비 최적 브랜드 발주 기준
+
+- **5대 품목 평균 절감률 9.70%**
+  - 계란 19.84%
+  - 설탕 17.52%
+  - 버터 6.74%
+  - 밀가루 4.33%
+  - 우유 0.06%
+- 장바구니 최적화: 품목별 최저가 분산 발주 시 **9.28% 절감**
+- 25개 조사일 역사적 백테스트: 평균 **4.52% 절감**
+  - 회차별 2.98%~7.30%
+
+---
+
+## 12. 실행 방법
+
+> 아래 명령은 표준 Docker Compose 구성 예시입니다. 실제 명령과 환경변수는 레포지토리 구성에 맞게 조정합니다.
+
+```bash
+# 1) 레포지토리 클론
+git clone https://github.com/Costradar-team/service.git
+cd service
+
+# 2) 환경변수 설정 (.env)
+# DB 접속 정보, 공공데이터 API 키 등
+
+# 3) 컨테이너 실행
+# MySQL :3307 · FastAPI :8000 · Flask :5001 · Airflow :8081
+docker-compose up -d
+```
+
+### 접속 주소
+
+- **Web:** `http://127.0.0.1:5001`
+- **API Docs:** `http://127.0.0.1:8000/docs`
+
+---
+
+## 13. 팀 & 역할
+
+| 역할 | 담당 |
+| --- | --- |
+| **PM / 기획** | 이정현 |
+| **데이터 엔지니어링** | 박채연 |
+| **AI / ML** | 정승빈 · 정대원 |
+| **백엔드** | 최혜원 |
+| **프론트엔드** | 유다연 |
+
+---
+
+## 14. 폴더 구조
 
 ```text
-상품 선택
-  -> 브랜드별 미래 가격 비교
-  -> 브랜드 선택
-  -> 해당 브랜드의 지점별 미래 가격 목록
-  -> 최저·평균·최고 지점을 차트나 표로 표시
+service/
+├── data-pipeline/              # 원천 데이터 수집 · 품질 검증 · MySQL 적재 파이프라인
+│   ├── config/                 # 품목 매핑 룰 및 데이터 품질 검사 설정
+│   ├── dags/                   # Airflow DAG
+│   ├── scripts/                # ETL 코드
+│   │                           # └─ 크롤러 포함 수집 · 전처리 변환 · DB 적재
+│   ├── sql/                    # 데이터베이스 초기 DDL 스키마 (테스트용)
+│   └── tests/                  # 데이터 수집 및 파이프라인 단위 테스트
+│
+├── ml/                         # 가격 예측 모델 학습 및 구매 신호 생성 엔진
+│   ├── scripts/                # 시계열 피처링 · 학습 · 추론 · 신호 판정
+│   └── tests/                  # ML 파이프라인 및 통계 수식 검증 테스트
+│
+├── backend/                    # FastAPI 기반 비즈니스 로직 및 REST API 서버
+│   ├── data/                   # ML 예측 · 신호 결과 데이터셋
+│   │                           # └─ brand_forecasts.json
+│   └── sql/                    # 프로덕션 운영용 데이터베이스 스키마
+│
+├── frontend/                   # Flask 기반 대시보드 웹 프론트
+│   ├── templates/              # 홈 · 품목 상세 · 지점 시세 · 발주 리스트 UI
+│   ├── static/                 # 차트 · 인터랙션 JS · 스타일
+│   └── data/                   # 오프라인 시연용 목업 데이터
+│
+├── artifacts/                  # 파이프라인 실행 중 생성되는 중간 · 최종 산출물
+│   ├── data-quality/           # 데이터 프로파일링 및 정제 검증 보고서
+│   ├── processed/              # 표준화 완료 통합 가격 데이터셋
+│   └── ml/                     # 학습 모델(.joblib) 및 백테스트 결과
+│
+├── docs/                       # 시스템 아키텍처 문서 및 데이터베이스 ERD
+└── scripts/                    # DB 스키마 적용 및 공통 유틸리티 스크립트
 ```
 
-구현된 핵심 기능은 다음과 같습니다.
+---
 
-- 판매업소 이름에서 이마트, 롯데마트·슈퍼, GS더프레시 등 10개 브랜드를 구분합니다.
-- 466개 지점을 원본 판매업소 이름 그대로 구분합니다.
-- 브랜드 가격은 `상품 × 브랜드 × 조사일`의 지점 가격 중앙값을 예측합니다.
-- 지점 가격은 브랜드 평균에 보정계수를 곱하지 않습니다. 각 지점에서 실제로
-  조사된 가격 이력을 학습하여 `상품 × 브랜드 × 지점` 가격을 직접 예측합니다.
-- 지점마다 모델을 따로 만들지 않고 모든 지점 데이터를 하나의 글로벌 모델로
-  학습하여 데이터가 적은 지점도 다른 지점의 공통 패턴을 활용합니다.
-- `ForecastHorizon`을 사용하면 여러 미래 조사 시점을 연속으로 예측합니다.
-  2단계부터는 직전 단계의 ML 예측값을 다음 단계 입력으로 사용합니다.
-- FIS는 밀가루·설탕, KAMIS는 계란·우유에 연결합니다. 계란 10구와 30구는
-  `KRW/10ea`로 환산하며 미래 관측값이 과거 학습 행에 섞이지 않게 합니다.
-- 학습할 때 소매가격 이력 모델과 외부시장 특성을 추가한 모델을 같은 시간 구간에서
-  비교하고, sMAPE가 더 낮은 특성 구성을 예측 단위별로 자동 저장합니다.
-- 백엔드 전달용 JSON은 세부유형, 상품명, 브랜드, 지점의 네 종류로 생성합니다.
+## 15. 향후 발전 방향
 
-현재 데이터에서는 상품·지점 시계열 9,615개 중 실제가격이 최소 6회 이상 있는
-9,083개를 지점 직접예측 대상으로 사용합니다. 3단계 예측을 실행하면 브랜드 예측
-618건과 지점 예측 27,249건이 생성됩니다.
-
-외부에 전달하는 미래 가격은 ML이 계산한 `modelPredictedUnitPrice`입니다. 마지막
-실제가격은 `currentUnitPrice` 또는 `lastActualUnitPrice`로 구분해 기준 시점 정보로만
-제공합니다. 직전 가격 유지값은 내부 백테스트 비교에만 사용하며 예측 CSV나 JSON에는
-포함하지 않습니다.
-
-지점 3단계 전체 JSON은 약 18MB이므로 실제 조회 API에서는 전체 파일을 한 번에
-반환하지 않고 상품, 브랜드, 예측 단계로 필터링한 뒤 페이지네이션해야 합니다.
-
-## 로컬 실행
-
-### 요구 환경
-
-- Python 3.11 이상
-- PowerShell 7 권장
-- Docker Desktop은 MySQL을 사용할 때만 필요
-
-가격 정제와 기준 모델 파이프라인은 Python 표준 라이브러리만으로 실행됩니다.
-글로벌 가격예측 모델을 학습하려면 ML 패키지를 설치합니다.
-
-```powershell
-python -m pip install -r requirements.txt
-```
-
-LightGBM 모델까지 사용할 경우 다음 파일을 설치합니다.
-
-```powershell
-python -m pip install -r requirements-lightgbm.txt
-```
-
-### 전체 파이프라인
-
-저장소 루트에서 최초 한 번은 모델을 학습합니다.
-
-```powershell
-.\run_local.ps1 -TrainModel
-```
-
-이미 데이터 품질 검사를 완료했다면 프로파일링을 생략할 수 있습니다.
-
-```powershell
-.\run_local.ps1 -SkipProfiling -TrainModel
-```
-
-최초 실행 또는 정기 재학습 시 세부유형, 상품명, 브랜드, 지점 가격예측 모델을
-모두 학습합니다.
-기본 학습기는 scikit-learn의 단일 프로세스 Gradient Boosting입니다.
-시간순 백테스트에서 학습 모델을 직전 가격 기준선과 비교하지만, 기준선은 성능
-평가에만 사용하고 예측 산출물에는 넣지 않습니다. 학습 후에는 전체 과거 데이터로
-운영용 모델을 다시 적합하여 `price_model.joblib`에 저장합니다.
-
-GitHub에 포함된 `data-pipeline/data/processed/fis/`와
-`data-pipeline/data/processed/kamis/` 정제 CSV를 `run_local.ps1`이 자동으로 읽어
-외부시장 특성을 포함합니다. 파일이 없는 환경에서는 소매가격 이력만으로도 실행됩니다.
-
-새 원천 CSV를 추가한 뒤에는 `-TrainModel`을 사용하지 않습니다. 전처리와 최신
-특징값 계산만 다시 수행하고 저장된 모델을 불러와 예측합니다.
-
-```powershell
-.\run_local.ps1 -SkipProfiling
-```
-
-여러 조사 시점을 연속으로 예측하려면 재귀 예측 단계 수를 지정합니다. 2단계부터는
-직전 모델 예측값을 임시 가격 이력에 추가해 lag와 이동통계를 다시 계산합니다.
-예측값은 원천 데이터나 학습 데이터에 저장되지 않습니다.
-
-```powershell
-.\run_local.ps1 -SkipProfiling -ForecastHorizon 3
-```
-
-기본값은 `1`이며, 다단계 예측은 단계가 멀어질수록 오차가 누적될 수 있습니다.
-
-즉, `-TrainModel`은 최초 학습이나 의도한 정기 재학습 때만 사용합니다. 현재는
-자동 재학습 스케줄을 두지 않으며, 새 조사일 약 6개가 누적되는 시점(현재 수집
-간격 기준 약 3개월)을 재학습 검토 기준으로 권장합니다.
-
-LightGBM을 설치했다면 동일한 흐름에서 모델만 변경할 수 있습니다.
-
-```powershell
-.\run_local.ps1 -SkipProfiling -TrainModel -Estimator lightgbm
-```
-
-산출물은 Git에 포함되지 않는 `artifacts/` 아래에 생성됩니다.
-
-```text
-artifacts/
-├─ data-quality/
-├─ processed/kca_prices_processed.csv
-└─ ml/
-   ├─ normalized_prices.csv
-   ├─ model_dataset.csv
-   ├─ dataset_summary.json
-   ├─ baseline_metrics.json
-   ├─ baseline_predictions.csv
-   ├─ model/                         # 세부유형 대표가격 모델
-   │  ├─ price_model.joblib
-   │  ├─ training_report.json
-   │  ├─ backtest_predictions.csv
-   │  ├─ prediction_report.json
-   │  └─ future_predictions.csv
-   ├─ product/                       # 상품명별 가격 모델
-   │  ├─ model_dataset.csv
-   │  ├─ baseline_metrics.json
-   │  ├─ baseline_predictions.csv
-   │  └─ model/
-   │     ├─ price_model.joblib
-   │     ├─ training_report.json
-   │     ├─ backtest_predictions.csv
-   │     ├─ prediction_report.json
-   │     └─ future_predictions.csv
-   ├─ brand/                         # 상품·브랜드별 중앙가격 모델
-   │  ├─ model_dataset.csv
-   │  ├─ baseline_metrics.json
-   │  └─ model/
-   │     ├─ price_model.joblib
-   │     └─ future_predictions.csv
-   ├─ store/                         # 상품·지점별 실제가격 직접예측 모델
-   │  ├─ model_dataset.csv
-   │  ├─ baseline_metrics.json
-   │  └─ model/
-   │     ├─ price_model.joblib
-   │     └─ future_predictions.csv
-   └─ backend/                       # 백엔드 API 요청 본문
-      ├─ subtype_forecasts.json
-      ├─ product_forecasts.json
-      ├─ brand_forecasts.json
-      ├─ store_forecasts.json
-      └─ export_summary.json
-```
-
-루트 `ml/model_dataset.csv`와 `ml/model/`은 품목·세부유형 단위 결과입니다.
-`ml/product/` 아래 결과는 동일 상품의 여러 판매점 가격을 조사일별 중앙값으로
-합친 상품명 단위 결과입니다.
-`ml/brand/`는 동일 상품과 브랜드의 지점 가격 중앙값이며, `ml/store/`는
-보정계수가 아닌 개별 지점의 관측 단위가격을 직접 목표값으로 사용한 결과입니다.
-
-### 개별 실행
-
-```powershell
-python data-pipeline\scripts\profile\profile_kca.py data-pipeline\data\raw\kca `
-  --output artifacts\data-quality\profiling_summary.json
-
-python data-pipeline\scripts\transform\transform_kca.py data-pipeline\data\raw\kca `
-  --output-dir artifacts\processed `
-  --report-dir artifacts\data-quality\transform
-
-python ml\scripts\build_model_dataset.py `
-  --input artifacts\processed\kca_prices_processed.csv `
-  --output-dir artifacts\ml `
-  --fis-dir data-pipeline\data\processed\fis `
-  --kamis-dir data-pipeline\data\processed\kamis
-
-python ml\scripts\evaluate_baselines.py `
-  --input artifacts\ml\model_dataset.csv `
-  --output-dir artifacts\ml
-
-python ml\scripts\train_price_model.py `
-  --input artifacts\ml\model_dataset.csv `
-  --output-dir artifacts\ml\model
-
-python ml\scripts\predict_prices.py `
-  --input artifacts\ml\model_dataset.csv `
-  --model artifacts\ml\model\price_model.joblib `
-  --output-dir artifacts\ml\model `
-  --forecast-horizon 3
-
-python ml\scripts\train_price_model.py `
-  --input artifacts\ml\brand\model_dataset.csv `
-  --output-dir artifacts\ml\brand\model `
-  --series-level brand
-
-python ml\scripts\predict_prices.py `
-  --input artifacts\ml\brand\model_dataset.csv `
-  --model artifacts\ml\brand\model\price_model.joblib `
-  --output-dir artifacts\ml\brand\model `
-  --series-level brand `
-  --forecast-horizon 3
-
-python ml\scripts\train_price_model.py `
-  --input artifacts\ml\store\model_dataset.csv `
-  --output-dir artifacts\ml\store\model `
-  --series-level store
-
-python ml\scripts\predict_prices.py `
-  --input artifacts\ml\store\model_dataset.csv `
-  --model artifacts\ml\store\model\price_model.joblib `
-  --output-dir artifacts\ml\store\model `
-  --series-level store `
-  --forecast-horizon 3
-
-python ml\scripts\evaluate_baselines.py `
-  --input artifacts\ml\product\model_dataset.csv `
-  --output-dir artifacts\ml\product `
-  --series-level product
-
-python ml\scripts\train_price_model.py `
-  --input artifacts\ml\product\model_dataset.csv `
-  --output-dir artifacts\ml\product\model `
-  --series-level product
-
-python ml\scripts\predict_prices.py `
-  --input artifacts\ml\product\model_dataset.csv `
-  --model artifacts\ml\product\model\price_model.joblib `
-  --output-dir artifacts\ml\product\model `
-  --series-level product `
-  --forecast-horizon 3
-
-python ml\scripts\export_backend_forecasts.py `
-  --subtype-input artifacts\ml\model\future_predictions.csv `
-  --product-input artifacts\ml\product\model\future_predictions.csv `
-  --brand-input artifacts\ml\brand\model\future_predictions.csv `
-  --store-input artifacts\ml\store\model\future_predictions.csv `
-  --output-dir artifacts\ml\backend
-```
-
-### 테스트
-
-```powershell
-python -m unittest discover -s ml\tests -v
-```
-
-### MySQL 선택 실행
-
-`.env.example`을 `.env`로 복사하고 비밀번호를 변경한 뒤 실행합니다.
-
-```powershell
-docker compose up -d mysql
-```
-
-현재 MySQL 컨테이너는 데이터베이스 실행 환경만 제공합니다. CSV 적재 기능은
-후속 작업 범위입니다.
-
-## 현재 상태와 제한
-
-- 원천 데이터 13개 파일에서 전체 25개 조사일을 확인했습니다.
-- 세부유형 19개, 상품명 39개, 브랜드 222개, 상품·지점 9,615개 시계열을
-  평가합니다.
-- 지점 466개를 구분하며 최소 6회 이상 관측된 상품·지점 시계열 9,083개를
-  직접예측합니다.
-- 계란은 13개 조사일만 존재해 단기 예측 모델을 주장하기에는 부족합니다.
-- 현재 시간순 검증에서는 외부시장 특성이 지점 모델에서만 sMAPE를
-  `1.5455%`에서 `1.4694%`로 낮춰 채택됐습니다. 세부유형·상품·브랜드 모델은
-  소매가격 이력만 사용하도록 자동 선택됐습니다.
-- FIS·KAMIS 검증 데이터의 마지막 날짜는 2026-07-31이므로 운영 전 최신 수집이
-  필요합니다.
-- 기준 모델 평가는 파이프라인 검증용이며 서비스용 최종 예측 모델이 아닙니다.
-- FastAPI는 `backend/` (`http://127.0.0.1:8000`). 시세는 KCA, 2주 예측과 BUY/WAIT/HOLD는 `backend/data/brand_forecasts.json`.
-- 3단계 지점 예측 JSON은 약 18MB이므로 실제 API는 상품·브랜드·단계별 필터와
-  페이지네이션을 적용해야 합니다.
-- MySQL 로컬 실행에는 별도로 Docker Desktop을 설치해야 합니다.
-
-## 로컬 Docker · 스키마
-
-각자 PC에서 MySQL을 띄운 뒤 테이블을 만든다. 비밀번호는 `.env`. GitHub에 올리지 않는다.
-
-```powershell
-copy .env.example .env
-docker compose up -d
-.\scripts\apply_schema.ps1
-```
-
-- 호스트 포트 `3307` (`.env`의 `MYSQL_PORT`)
-- 테이블 11개: KCA 7 (`retailer` 포함) + KAMIS 2 + FIS 2
-- 처음 `docker compose up`만 하면 빈 볼륨에 SQL이 자동으로 들어간다. 이미 볼륨이 있으면 `apply_schema.ps1`을 쓴다.
-- 적재된 행이 있으면 `apply_schema.ps1` / `001`을 다시 돌리지 않는다 (`DROP` 있음).
-
-적재(processed CSV는 PR #13 이후 GitHub main에 있음):
-
-```powershell
-python data-pipeline\scripts\load\load_kca_mysql.py
-python data-pipeline\scripts\load\load_kamis.py
-python data-pipeline\scripts\load\load_fis_mysql.py
-```
-
-CSV 기본 경로: `data-pipeline/data/processed/kca|kamis|fis/`.
-
-## 협업 규칙
-
-- 브랜치 전략은 GitHub Flow를 따른다.
-- 브랜치명은 `feature/`, `fix/`, `refactor/`, `docs/`, `test/`, `chore/` prefix를 사용한다.
-- 커밋 메시지는 `feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:` 형식을 사용한다.
+- **온라인 현재가 수집 범위 확대**
+  - 현재 농협몰 · 롯데마트 → 이마트 등 추가
+- **MVP 이후 기능 확장**
+  - 지역 필터
+  - 발주 리스트 저장
+  - 가격 하락 알림
+- **외생 변수 추가**
+  - 날씨
+  - 공휴일
+  - 명절 수요
+- **LLM 기반 구매 코칭 연동**
+  - 예측 신호와 자연어 발주 어드바이스 결합
