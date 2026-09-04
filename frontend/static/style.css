@@ -1,4 +1,3 @@
-/* 와이어프레임에 맞춰 '다크 테마'로 고정했어요 */
   :root{
     --bg:#0b0f14; --surface:#141a21; --surface-2:#1a212a; --elev:#1e2731;
     --line:#26313c; --ink:#e7edf3; --muted:#8b97a4; --muted-2:#6b7885;
@@ -12,7 +11,7 @@
     margin:0; background:var(--bg); color:var(--ink);
     font-family:"Noto Sans KR","Malgun Gothic",system-ui,sans-serif;
     line-height:1.55; -webkit-font-smoothing:antialiased;
-    padding-left:56px; /* 왼쪽 고정 사이드바 자리 */
+    padding-left:56px; /* 왼쪽 고정 사이드바 자리*/
   }
   .wrap{max-width:1120px; margin:0 auto; padding:26px 22px 70px;}
 
@@ -88,7 +87,7 @@
   .bigsig.hold .word{color:var(--muted);}
   .bigsig.hold .cta{background:var(--elev); color:var(--ink); border:1px solid var(--line);}
 
-  /* 홈: 신호 카드 3개 */
+  /* 홈: 구매 신호 카드 */
   .signal-grid{display:grid; grid-template-columns:repeat(3,1fr); gap:14px;}
   @media (max-width:760px){.signal-grid{grid-template-columns:1fr;}}
   .signal-card{background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:16px 18px; cursor:pointer; box-shadow:var(--shadow); transition:border-color .15s, transform .1s;}
@@ -97,7 +96,7 @@
   .signal-card .nm{font-weight:700; font-size:1.05rem;}
   .signal-card .advice{color:var(--muted); font-size:.82rem; margin-bottom:10px;}
   .signal-card .prob{font-weight:700; font-size:.95rem;}
-  .signal-card .prob.down{color:var(--green);}  /* 하락=사장님에게 유리 */
+  .signal-card .prob.down{color:var(--green);} 
   .signal-card .prob.up{color:var(--amber);}
 
   /* 품목 상세 2단 레이아웃 */
@@ -146,7 +145,7 @@
   .store-row .add{background:#eef2f5; color:#111; border:none; border-radius:8px; padding:8px 13px; font-size:.82rem; font-weight:700; cursor:pointer;}
   .store-row .add:hover{background:#fff;}
 
-  /* 발주 리스트 2단 */
+  /* 발주 리스트 레이아웃 */
   .order-grid{display:grid; grid-template-columns:1fr 1fr; gap:18px; align-items:start;}
   @media (max-width:860px){.order-grid{grid-template-columns:1fr;}}
   .col{background:var(--surface); border:1px solid var(--line); border-radius:16px; padding:18px 20px; display:flex; flex-direction:column; min-height:420px;}
@@ -157,7 +156,7 @@
   .col .sub{font-size:.8rem; color:var(--muted); margin-bottom:16px;}
   .oline{border:1px solid var(--line); border-radius:12px; padding:13px 15px; margin-bottom:10px; background:var(--surface-2);}
   .oline .l1{display:flex; align-items:center; gap:14px;}
-  .oline .oi{font-weight:700; margin-right:auto;} /* 품목명은 왼쪽 고정, 스테퍼·삭제버튼은 오른쪽으로 묶어서 이동 */
+  .oline .oi{font-weight:700; margin-right:auto;} 
   .remove-btn{background:none; border:none; color:var(--muted-2); font-size:1rem; cursor:pointer; padding:4px 2px; line-height:1;}
   .remove-btn:hover{color:var(--amber);}
   .oline .op{font-weight:800; font-variant-numeric:tabular-nums;}
