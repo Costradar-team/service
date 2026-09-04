@@ -9,16 +9,33 @@ import numpy as np
 import pandas as pd
 
 try:
-    from .model_utils import calculate_metrics
+    from .train_price_model import calculate_metrics
 except ImportError:
-    from model_utils import calculate_metrics  # type: ignore[no-redef]
+    from train_price_model import calculate_metrics  # type: ignore[no-redef]
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ARTIFACT_ROOT = REPO_ROOT / "artifacts" / "ml"
 DEFAULT_OUTPUT = DEFAULT_ARTIFACT_ROOT / "backtest_business_metrics.json"
 
-ITEM_BACKTEST_INPUT = Path("item/model/backtest_predictions.csv")
+LEVEL_CONFIG = {
+    "item": {
+        "input": Path("item/model/backtest_predictions.csv"),
+        "actual_column": "median_unit_price",
+    },
+    "product": {
+        "input": Path("product/model/backtest_predictions.csv"),
+        "actual_column": "median_unit_price",
+    },
+    "brand": {
+        "input": Path("brand/model/backtest_predictions.csv"),
+        "actual_column": "median_unit_price",
+    },
+    "store": {
+        "input": Path("store/model/backtest_predictions.csv"),
+        "actual_column": "actual_unit_price",
+    },
+}
 
 IDENTIFIER_COLUMNS = [
     "survey_date",
@@ -141,30 +158,36 @@ def evaluate_artifact_root(
     output_path: Path,
     decision_threshold_percent: float = 0.0,
 ) -> dict[str, Any]:
-    input_path = artifact_root / ITEM_BACKTEST_INPUT
-    if not input_path.is_file():
-        raise FileNotFoundError(f"Backtest predictions not found: {input_path}")
-    frame = pd.read_csv(input_path, encoding="utf-8-sig")
-    metrics, decisions = evaluate_backtest_frame(
-        frame,
-        "median_unit_price",
-        decision_threshold_percent=decision_threshold_percent,
-    )
-    decision_path = input_path.parent / "backtest_purchase_decisions.csv"
-    decisions.to_csv(decision_path, index=False, encoding="utf-8-sig")
-    metrics["input"] = str(input_path)
-    metrics["decisions_output"] = str(decision_path)
+    results: dict[str, Any] = {}
+    total_rows = 0
 
-    by_item: dict[str, Any] = {}
-    if "canonical_item" in frame.columns:
-        for item_name, item_frame in frame.groupby("canonical_item", observed=True):
-            item_metrics, _ = evaluate_backtest_frame(
-                item_frame,
-                "median_unit_price",
-                decision_threshold_percent=decision_threshold_percent,
-            )
-            by_item[str(item_name)] = item_metrics
-    metrics["by_canonical_item"] = by_item
+    for level, config in LEVEL_CONFIG.items():
+        input_path = artifact_root / config["input"]
+        if not input_path.is_file():
+            raise FileNotFoundError(f"Backtest predictions not found: {input_path}")
+        frame = pd.read_csv(input_path, encoding="utf-8-sig")
+        metrics, decisions = evaluate_backtest_frame(
+            frame,
+            str(config["actual_column"]),
+            decision_threshold_percent=decision_threshold_percent,
+        )
+        decision_path = input_path.parent / "backtest_purchase_decisions.csv"
+        decisions.to_csv(decision_path, index=False, encoding="utf-8-sig")
+        metrics["input"] = str(input_path)
+        metrics["decisions_output"] = str(decision_path)
+
+        by_item: dict[str, Any] = {}
+        if "canonical_item" in frame.columns:
+            for item_name, item_frame in frame.groupby("canonical_item", observed=True):
+                item_metrics, _ = evaluate_backtest_frame(
+                    item_frame,
+                    str(config["actual_column"]),
+                    decision_threshold_percent=decision_threshold_percent,
+                )
+                by_item[str(item_name)] = item_metrics
+        metrics["by_canonical_item"] = by_item
+        results[level] = metrics
+        total_rows += int(metrics["sample_count"])
 
     payload = {
         "schema_version": "1.0",
@@ -179,8 +202,8 @@ def evaluate_artifact_root(
             "The baseline buys every row at its previous observed price.",
             "Inventory, waste, delivery, stockouts, and actual order quantities are excluded.",
         ],
-        "total_sample_count": int(metrics["sample_count"]),
-        "results": {"item": metrics},
+        "total_sample_count": total_rows,
+        "results": results,
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
@@ -197,7 +220,7 @@ def main() -> int:
     parser.add_argument(
         "--artifact-root",
         default=str(DEFAULT_ARTIFACT_ROOT),
-        help="Root containing the item model backtest CSV file.",
+        help="Root containing product/brand/store model backtest CSV files.",
     )
     parser.add_argument(
         "--output",

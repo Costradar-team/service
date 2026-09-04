@@ -12,10 +12,10 @@ import pandas as pd
 
 try:
     from .external_market_features import EXTERNAL_FEATURE_COLUMNS
-    from .model_utils import calculate_metrics, create_item_pipeline
+    from .train_price_model import calculate_metrics, create_pipeline
 except ImportError:
     from external_market_features import EXTERNAL_FEATURE_COLUMNS  # type: ignore[no-redef]
-    from model_utils import calculate_metrics, create_item_pipeline  # type: ignore[no-redef]
+    from train_price_model import calculate_metrics, create_pipeline  # type: ignore[no-redef]
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -232,9 +232,10 @@ def _walk_forward_predictions(
         test = frame.loc[frame["survey_date"] == target_date]
         if len(train) < 12 or test.empty:
             continue
-        pipeline = create_item_pipeline(
+        pipeline = create_pipeline(
             estimator_name,
             random_state,
+            series_level="item",
             numeric_features=numeric_features,
         )
         pipeline.fit(train[feature_columns], train["target_change_ratio"])
@@ -344,9 +345,10 @@ def train_advanced_item_model(
         selected_backtest = selected["backtest"].copy()
         numeric_features = list(selected["numeric_features"])
         feature_columns = GROUP_COLUMNS + numeric_features
-        pipeline = create_item_pipeline(
+        pipeline = create_pipeline(
             estimator_name,
             random_state,
+            series_level="item",
             numeric_features=numeric_features,
         )
         pipeline.fit(direct[feature_columns], direct["target_change_ratio"])

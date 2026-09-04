@@ -75,11 +75,13 @@ QUALITY_DIR="$ARTIFACT_ROOT/data-quality"
 PROCESSED_DIR="$ARTIFACT_ROOT/processed"
 TRANSFORM_REPORT_DIR="$QUALITY_DIR/transform"
 ML_DIR="$ARTIFACT_ROOT/ml"
-ITEM_ML_DIR="$ML_DIR/item"
+PRODUCT_ML_DIR="$ML_DIR/product"
+BRAND_ML_DIR="$ML_DIR/brand"
+STORE_ML_DIR="$ML_DIR/store"
 FIS_PROCESSED_DIR="$REPO_ROOT/data-pipeline/data/processed/fis"
 KAMIS_PROCESSED_DIR="$REPO_ROOT/data-pipeline/data/processed/kamis"
 
-mkdir -p "$QUALITY_DIR" "$PROCESSED_DIR" "$TRANSFORM_REPORT_DIR" "$ML_DIR" "$ITEM_ML_DIR"
+mkdir -p "$QUALITY_DIR" "$PROCESSED_DIR" "$TRANSFORM_REPORT_DIR" "$ML_DIR" "$PRODUCT_ML_DIR" "$BRAND_ML_DIR" "$STORE_ML_DIR"
 
 invoke_step() {
   local name="$1"
@@ -90,16 +92,16 @@ invoke_step() {
 }
 
 if [[ "$SKIP_PROFILING" -eq 0 ]]; then
-  invoke_step "1/4 Data profiling" \
+  invoke_step "1/7 Data profiling" \
     "$REPO_ROOT/data-pipeline/scripts/profile/profile_kca.py" \
     "$KCA_RAW_DATA" \
     --output "$QUALITY_DIR/profiling_summary.json"
 else
   echo ""
-  echo "[1/4 Data profiling skipped]"
+  echo "[1/7 Data profiling skipped]"
 fi
 
-invoke_step "2/4 Data transform" \
+invoke_step "2/7 Data transform" \
   "$REPO_ROOT/data-pipeline/scripts/transform/transform_kca.py" \
   "$KCA_RAW_DATA" \
   --output-dir "$PROCESSED_DIR" \
@@ -119,40 +121,107 @@ if [[ -f "$KAMIS_PROCESSED_DIR/kamis_item.csv" && -f "$KAMIS_PROCESSED_DIR/kamis
   BUILD_ARGS+=(--kamis-dir "$KAMIS_PROCESSED_DIR")
 fi
 
-invoke_step "3/4 Unit-price normalization and external-feature dataset build" "${BUILD_ARGS[@]}"
+invoke_step "3/7 Unit-price normalization and external-feature dataset build" "${BUILD_ARGS[@]}"
 
-invoke_step "4/4 Item baseline evaluation" \
+invoke_step "4/7 Subtype baseline evaluation" \
   "$REPO_ROOT/ml/scripts/evaluate_baselines.py" \
-  --input "$ITEM_ML_DIR/model_dataset.csv" \
-  --output-dir "$ITEM_ML_DIR" \
-  --series-level "item"
+  --input "$ML_DIR/model_dataset.csv" \
+  --output-dir "$ML_DIR"
+
+invoke_step "5/7 Product baseline evaluation" \
+  "$REPO_ROOT/ml/scripts/evaluate_baselines.py" \
+  --input "$PRODUCT_ML_DIR/model_dataset.csv" \
+  --output-dir "$PRODUCT_ML_DIR" \
+  --series-level "product"
+
+invoke_step "6/7 Brand baseline evaluation" \
+  "$REPO_ROOT/ml/scripts/evaluate_baselines.py" \
+  --input "$BRAND_ML_DIR/model_dataset.csv" \
+  --output-dir "$BRAND_ML_DIR" \
+  --series-level "brand"
+
+invoke_step "7/7 Store baseline evaluation" \
+  "$REPO_ROOT/ml/scripts/evaluate_baselines.py" \
+  --input "$STORE_ML_DIR/model_dataset.csv" \
+  --output-dir "$STORE_ML_DIR" \
+  --series-level "store"
 
 if [[ "$TRAIN_MODEL" -eq 1 ]]; then
-  invoke_step "Advanced direct item price model training" \
-    "$REPO_ROOT/ml/scripts/train_advanced_item_model.py" \
-    --input "$ITEM_ML_DIR/model_dataset.csv" \
-    --output-dir "$ITEM_ML_DIR/model" \
-    --max-forecast-horizon 4 \
+  invoke_step "Subtype price model training" \
+    "$REPO_ROOT/ml/scripts/train_price_model.py" \
+    --input "$ML_DIR/model_dataset.csv" \
+    --output-dir "$ML_DIR/model" \
+    --estimator "$ESTIMATOR"
+
+  invoke_step "Product price model training" \
+    "$REPO_ROOT/ml/scripts/train_price_model.py" \
+    --input "$PRODUCT_ML_DIR/model_dataset.csv" \
+    --output-dir "$PRODUCT_ML_DIR/model" \
+    --series-level "product" \
+    --estimator "$ESTIMATOR"
+
+  invoke_step "Brand price model training" \
+    "$REPO_ROOT/ml/scripts/train_price_model.py" \
+    --input "$BRAND_ML_DIR/model_dataset.csv" \
+    --output-dir "$BRAND_ML_DIR/model" \
+    --series-level "brand" \
+    --estimator "$ESTIMATOR"
+
+  invoke_step "Direct store price model training" \
+    "$REPO_ROOT/ml/scripts/train_price_model.py" \
+    --input "$STORE_ML_DIR/model_dataset.csv" \
+    --output-dir "$STORE_ML_DIR/model" \
+    --series-level "store" \
     --estimator "$ESTIMATOR"
 fi
 
-ITEM_MODEL="$ITEM_ML_DIR/model/price_model.joblib"
+SUBTYPE_MODEL="$ML_DIR/model/price_model.joblib"
+PRODUCT_MODEL="$PRODUCT_ML_DIR/model/price_model.joblib"
+BRAND_MODEL="$BRAND_ML_DIR/model/price_model.joblib"
+STORE_MODEL="$STORE_ML_DIR/model/price_model.joblib"
 
-if [[ ! -f "$ITEM_MODEL" ]]; then
-  echo "Trained item model not found. Run once with --train-model."
+if [[ ! -f "$SUBTYPE_MODEL" || ! -f "$PRODUCT_MODEL" || ! -f "$BRAND_MODEL" || ! -f "$STORE_MODEL" ]]; then
+  echo "Trained models not found. Run once with --train-model."
   exit 1
 fi
 
-invoke_step "Advanced direct item price prediction (saved model)" \
-  "$REPO_ROOT/ml/scripts/predict_advanced_item_prices.py" \
-  --input "$ITEM_ML_DIR/model_dataset.csv" \
-  --model "$ITEM_MODEL" \
-  --output-dir "$ITEM_ML_DIR/model" \
+invoke_step "Subtype price prediction (saved model)" \
+  "$REPO_ROOT/ml/scripts/predict_prices.py" \
+  --input "$ML_DIR/model_dataset.csv" \
+  --model "$SUBTYPE_MODEL" \
+  --output-dir "$ML_DIR/model" \
+  --forecast-horizon "$FORECAST_HORIZON"
+
+invoke_step "Product price prediction (saved model)" \
+  "$REPO_ROOT/ml/scripts/predict_prices.py" \
+  --input "$PRODUCT_ML_DIR/model_dataset.csv" \
+  --model "$PRODUCT_MODEL" \
+  --output-dir "$PRODUCT_ML_DIR/model" \
+  --series-level "product" \
+  --forecast-horizon "$FORECAST_HORIZON"
+
+invoke_step "Brand price prediction (saved model)" \
+  "$REPO_ROOT/ml/scripts/predict_prices.py" \
+  --input "$BRAND_ML_DIR/model_dataset.csv" \
+  --model "$BRAND_MODEL" \
+  --output-dir "$BRAND_ML_DIR/model" \
+  --series-level "brand" \
+  --forecast-horizon "$FORECAST_HORIZON"
+
+invoke_step "Direct store price prediction (saved model)" \
+  "$REPO_ROOT/ml/scripts/predict_prices.py" \
+  --input "$STORE_ML_DIR/model_dataset.csv" \
+  --model "$STORE_MODEL" \
+  --output-dir "$STORE_ML_DIR/model" \
+  --series-level "store" \
   --forecast-horizon "$FORECAST_HORIZON"
 
 invoke_step "Backend forecast payload export" \
   "$REPO_ROOT/ml/scripts/export_backend_forecasts.py" \
-  --item-input "$ITEM_ML_DIR/model/future_predictions.csv" \
+  --subtype-input "$ML_DIR/model/future_predictions.csv" \
+  --product-input "$PRODUCT_ML_DIR/model/future_predictions.csv" \
+  --brand-input "$BRAND_ML_DIR/model/future_predictions.csv" \
+  --store-input "$STORE_ML_DIR/model/future_predictions.csv" \
   --output-dir "$ML_DIR/backend"
 
 if [[ "$RUN_TESTS" -eq 1 ]]; then

@@ -59,33 +59,42 @@ class EvaluateBacktestSavingsTest(unittest.TestCase):
         self.assertEqual(timing["savings_amount"], -20.0)
         self.assertEqual(timing["savings_percent"], -20.0)
 
-    def test_writes_summary_and_decision_file_for_item_model(self) -> None:
+    def test_writes_summary_and_decision_files_for_all_levels(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            model_dir = root / "item" / "model"
-            model_dir.mkdir(parents=True)
-            pd.DataFrame(
-                {
-                    "survey_date": ["2026-02-01"],
-                    "canonical_item": ["밀가루"],
-                    "median_unit_price": [90.0],
-                    "lag_1": [100.0],
-                    "model_prediction": [95.0],
-                    "naive_prediction": [100.0],
-                }
-            ).to_csv(
-                model_dir / "backtest_predictions.csv",
-                index=False,
-                encoding="utf-8-sig",
-            )
+            for level, actual_column in (
+                ("item", "median_unit_price"),
+                ("product", "median_unit_price"),
+                ("brand", "median_unit_price"),
+                ("store", "actual_unit_price"),
+            ):
+                model_dir = root / level / "model"
+                model_dir.mkdir(parents=True)
+                pd.DataFrame(
+                    {
+                        "survey_date": ["2026-02-01"],
+                        "canonical_item": ["밀가루"],
+                        actual_column: [90.0],
+                        "lag_1": [100.0],
+                        "model_prediction": [95.0],
+                        "naive_prediction": [100.0],
+                    }
+                ).to_csv(
+                    model_dir / "backtest_predictions.csv",
+                    index=False,
+                    encoding="utf-8-sig",
+                )
 
             output_path = root / "backtest_business_metrics.json"
             payload = evaluate_artifact_root(root, output_path)
 
-            self.assertEqual(payload["total_sample_count"], 1)
-            self.assertEqual(set(payload["results"]), {"item"})
+            self.assertEqual(payload["total_sample_count"], 4)
             self.assertEqual(
-                payload["results"]["item"]["purchase_timing_backtest"][
+                set(payload["results"]),
+                {"item", "product", "brand", "store"},
+            )
+            self.assertEqual(
+                payload["results"]["store"]["purchase_timing_backtest"][
                     "savings_percent"
                 ],
                 10.0,
@@ -93,9 +102,10 @@ class EvaluateBacktestSavingsTest(unittest.TestCase):
             self.assertTrue(output_path.is_file())
             saved = json.loads(output_path.read_text(encoding="utf-8"))
             self.assertEqual(saved["schema_version"], "1.0")
-            self.assertTrue(
-                (model_dir / "backtest_purchase_decisions.csv").is_file()
-            )
+            for level in ("item", "product", "brand", "store"):
+                self.assertTrue(
+                    (root / level / "model" / "backtest_purchase_decisions.csv").is_file()
+                )
 
     def test_rejects_negative_decision_threshold(self) -> None:
         frame = pd.DataFrame(
