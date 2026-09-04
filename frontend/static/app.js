@@ -1,8 +1,3 @@
-/* =====================================================================
-   [1] 가짜 데이터 (MOCK_DB)  ★ 나중에 여기만 백엔드/AI로 교체 ★
-   brands = 농협 / 이마트 / 롯데 (회의 확정)
-   숫자는 전부 예시예요.
-===================================================================== */
 const CHART_LABELS = ["6월","7월","8월","현재","2주후","3주후","4주후"];
 
 const ITEMS = [
@@ -89,17 +84,14 @@ const ITEMS = [
 ];
 const byId = id => ITEMS.find(x => x.id === id);
 
-/* =====================================================================
-   장바구니(발주 담기) 저장 — 화면을 나가거나 새로고침해도 유지되도록
-   브라우저 localStorage에 저장해요. (쿠팡 등처럼 "담은 상태"가 유지됨)
-===================================================================== */
+// 발주 리스트 상태 유지를 위한 localStorage 키
 const CART_KEY = "costradar_cart_v1";
 function loadCart(){
   try {
     const raw = localStorage.getItem(CART_KEY);
     if (raw) return JSON.parse(raw);
   } catch(e){ console.warn("장바구니 불러오기 실패:", e); }
-  return []; // 처음 방문이면 빈 장바구니로 시작
+  return []; 
 }
 function saveCart(){
   try { localStorage.setItem(CART_KEY, JSON.stringify(myOrder)); }
@@ -107,7 +99,7 @@ function saveCart(){
 }
 let myOrder = loadCart();
 
-/* 장바구니 아이콘 옆 숫자 배지 (상단 + 사이드바 둘 다) 갱신 */
+// 발주 리스트 수량 배지 갱신
 function updateCartBadge(){
   const n = myOrder.reduce((sum,o) => sum + o.qty, 0);
   ["cartBadgeTop","cartBadgeSide"].forEach(id => {
@@ -118,21 +110,18 @@ function updateCartBadge(){
   });
 }
 
-/* 오늘/예측 모드 → 예측가는 today 가격에 fcFactor를 곱해 계산 (실제 API는 값을 직접 줌).
-   하락 신호 품목은 예측이 더 싸고(<1), 상승 신호 품목은 조금 오름(>1). */
+// 백엔드 미연결 시 목업 예측 가격 계산에 사용하는 보정 계수
 ITEMS.forEach(it => it.fcFactor = it.probKind === "하락" ? +(1 - it.prob/1000).toFixed(3) : 1.01);
-/* 예측 기간: 우유·계란은 유통기한이 짧아 1~2주, 나머지는 2~4주 (팀 결정) */
+// 예측 기간: 우유·계란은 단기 품목이라 1-2주, 나머지는 장기 품목이라 2-4 
 ITEMS.forEach(it => it.horizon = (it.id === "milk" || it.id === "egg") ? "1~2주" : "2~4주");
-/* 특정 품목/브랜드의 가격을 모드에 맞게 돌려줌 */
+// 구매 모드에 따른 품목별 브랜드 가격 반환
 function priceOf(item, brandName, mode){
   const r = item.retailers.find(x => x.name === brandName);
   if (!r) return null;
   return mode === "forecast" ? Math.round(r.price * item.fcFactor) : r.price;
 }
 
-/* =====================================================================
-   [2] 테마 색을 Chart.js에 넘기기
-===================================================================== */
+// CSS 변수 기반 차트 색상 설정
 const css = getComputedStyle(document.documentElement);
 const C = {
   actual: css.getPropertyValue("--chart-actual").trim(),
@@ -145,9 +134,6 @@ const C = {
 };
 const won = n => n.toLocaleString("ko-KR") + "원";
 
-/* =====================================================================
-   [3] 화면 전환 함수 (버튼 누르면 이 함수로 화면 이동)
-===================================================================== */
 let currentItem = "flour";
 function go(view){
   ["home","signal","detail","order"].forEach(v =>
@@ -160,13 +146,10 @@ function toast(msg){
   clearTimeout(t._t); t._t = setTimeout(()=>t.classList.remove("show"), 1800);
 }
 
-/* =====================================================================
-   [4] 홈 화면 그리기
-===================================================================== */
+//홈화면 렌더링
 function renderHome(){
-  // 신호 카드는 전체 품목 (각 품목마다 구매 타이밍 신호가 있음)
   document.getElementById("signalGrid").innerHTML = ITEMS.map(it => {
-    // 신호 3종: BUY=초록 / WAIT=노랑 / HOLD=회색 (배지·글씨색 통일)
+    // 구매 신호별 스타일 클래스 설정
     const sigClass = it.signal === "BUY" ? "buy" : it.signal === "WAIT" ? "wait" : "hold";
     const colorClass = it.signal === "BUY" ? "down" : it.signal === "WAIT" ? "up" : "neu";
     return `
@@ -179,22 +162,19 @@ function renderHome(){
   }).join("");
 }
 
-/* =====================================================================
-   [5] 품목 상세 화면 그리기
-===================================================================== */
+// 품목 상세 화면 렌더링
 let detailChart = null;
 function showDetail(id){
   currentItem = id;
   const it = byId(id);
   go("detail");
-  // 상단 품목 탭
   document.getElementById("detailTabs").innerHTML = ITEMS.map(x =>
     `<button class="${x.id===id?"on":""}" onclick="showDetail('${x.id}')">${x.name}</button>`).join("");
-  renderDetailScreen(it);          // 먼저 (가짜 or 기존) 데이터로 그림
-  if(!USE_MOCK) enhanceDetail(it);  // 백엔드 연결 시 실제 예측/시세로 덮어씀
+  renderDetailScreen(it);          // 초기 데이터로 우선 렌더링
+  if(!USE_MOCK) enhanceDetail(it);  // 백엔드 응답으로 상세 데이터 갱신
 }
 
-// 상세 화면 본문 그리기 (신호 카드 + 판매처 시세 + 차트) — 신호 3종 BUY/WAIT/HOLD 지원
+// 상세 화면의 구매 신호, 판매처 시세 및 차트 렌더링
 function renderDetailScreen(it){
   const sig = it.signal;
   document.getElementById("bigsig").className = "bigsig " + sig.toLowerCase();
@@ -212,7 +192,7 @@ function renderDetailScreen(it){
   const alertBtn = document.getElementById("ctaAlert");
   if (alertBtn) alertBtn.onclick = () => toast("알림을 설정했어요 🔔");
 
-  // 판매처별 시세 (실시간이면 liveQuotes, 아니면 가짜 retailers)
+ // 실데이터가 있으면 liveQuotes를 사용하고, 없으면 목업 시세 사용
   const quotes = it.liveQuotes || it.retailers.map(r => ({ name:r.name, price:r.price, min:r.min }));
   document.getElementById("quoteDate").textContent =
     (it._predict && it._predict.survey_date) ? `${it._predict.survey_date} 기준` : "최근 조사일 기준";
@@ -225,7 +205,7 @@ function renderDetailScreen(it){
   renderDetailChart(it);
 }
 
-// 상세 실시간 연결: /predict(예측) + /prices/history(시세) → it 갱신 후 다시 그림
+// 예측·시세 API 응답을 상세 화면에 반영
 async function enhanceDetail(it){
   try{
     const [pred, hist] = await Promise.allSettled([ fetchPredict(it.name), fetchHistory(it.name) ]);
@@ -235,29 +215,27 @@ async function enhanceDetail(it){
     if(currentItem === it.id) renderDetailScreen(it);
   }catch(e){ console.warn("상세 API 폴백:", e); }
 }
-
-// 발주(POST /optimize/basket)가 쓰는 것과 똑같은 매핑 (백엔드 forecasts.py의 BASKET_BRANDS 기준)
-// "판매처별 최근 시세"도 온라인 구매 가정인 이 3개 브랜드로만 보여줘야, 발주 화면과 앞뒤가 맞음.
-// (그대로 두면 실데이터엔 편의점·백화점 등도 섞여 나와서 "지금 여기서 사세요" 문구와 안 맞았음)
+// 발주 API 기준 브랜드명 매핑
+// 발주 화면과의 일관성을 위해 대상 판매처를 농협·이마트·롯데로 제한
 const BASKET_BRAND_MAP = {
   "(주)농협유통": "농협", "(주)농협하나로유통": "농협",
   "이마트": "이마트",
   "롯데슈퍼": "롯데",
 };
 
-// /prices/history 응답 → 판매처 시세 + 차트(과거 실제 평균 + 예측 지점)로 변환
+// /prices/history 응답을 판매처 시세와 차트 데이터로 변환
 function applyHistoryToItem(it, hist){
   const labels = hist.period_labels || hist.survey_dates || [];
   const n = labels.length;
   const brands = hist.brands || [];
   if(!n || !brands.length) return;
-  // 날짜별 브랜드 평균 = 실제 가격 선 (여기는 시장 전체 평균 참고용이라 브랜드 제한 없이 그대로 둠)
+ // 시장 평균 추이를 위해 날짜별 전체 브랜드 평균 가격 계산
   const mean = [];
   for(let i=0;i<n;i++){
     const col = brands.map(b => b.prices[i]).filter(v => v != null);
     mean.push(col.length ? Math.round(col.reduce((a,c)=>a+c,0)/col.length) : null);
   }
-  // 판매처별 시세 = 농협·이마트·롯데 3곳만 (같은 브랜드 이름이 여러 개면 더 싼 쪽 사용)
+ // 대상 브랜드별 최신 최저가 구성
   const byBrand = {};
   brands.forEach(b => {
     const disp = BASKET_BRAND_MAP[b.brand];
@@ -267,7 +245,7 @@ function applyHistoryToItem(it, hist){
   it.liveQuotes = Object.entries(byBrand).map(([name,price]) => ({ name, price }))
                         .sort((a,b)=>a.price-b.price);
   if(it.liveQuotes.length) it.liveQuotes[0].min = true;
-  // 차트 = 과거 실제(평균) + 예측 지점(/predict)
+  // 과거 평균 시세와 2주 예측값으로 차트 구성
   const p = it._predict;
   const lastIdx = mean.reduce((acc,v,i)=> v!=null?i:acc, -1);
   const L = labels.concat(["2주 후"]);
@@ -283,9 +261,8 @@ function applyHistoryToItem(it, hist){
   it.liveChart = { labels:L, actual, center, lower, upper };
 }
 
-/* 실제/예측 값만 보고 y축 범위를 정함 (하한·상한 예측구간의 극단값 때문에
-   축이 확 늘어나서 실제 가격 변화가 안 보이는 문제 방지용).
-   "0부터 시작"이 아니라 데이터 범위에 여백만 살짝 둬서, 몇백 원 단위 변화도 보이게 함. */
+// 예측구간의 극단값으로 차트가 과도하게 축소되지 않도록
+// 실제·예측 중심값을 기준으로 y축 범위를 계산
 function niceAxisRange(values){
   const v = values.filter(x => x != null);
   if(!v.length) return { min:undefined, max:undefined };
@@ -301,13 +278,13 @@ function niceAxisRange(values){
 
 function renderDetailChart(it){
   const errEl = document.getElementById("chartError");
-  // Chart.js가 CDN에서 안 불러와졌을 때(네트워크 차단 등) 빈 화면 대신 안내 문구를 보여줌
+  // Chart.js 로드 실패 시 안내 문구 표시
   if (typeof Chart === "undefined"){
     if (errEl) errEl.hidden = false;
     return;
   }
   if (errEl) errEl.hidden = true;
-  // 실시간 차트(liveChart)가 있으면 그걸, 없으면 가짜(chart) 사용
+  // 실데이터 차트를 우선 사용하고 없으면 목업 차트 사용
   const ch = it.liveChart || { labels:CHART_LABELS, actual:it.chart.actual, center:it.chart.center, lower:it.chart.lower, upper:it.chart.upper };
   const fColor = it.signal==="BUY" ? C.green : it.signal==="WAIT" ? C.amber : C.muted;
   const fBand  = it.signal==="BUY" ? C.greenBand : it.signal==="WAIT" ? C.amberBand : "rgba(139,151,164,.15)";
@@ -323,7 +300,7 @@ function renderDetailChart(it){
         backgroundColor:fBand, fill:"-1" },
     ]
   };
-  // y축 범위: 상/하한 예측구간은 빼고 실제·예측 값 기준으로만 계산 (변화가 잘 보이도록)
+  // 실제·예측 중심값을 기준으로 y축 범위 설정
   const yRange = niceAxisRange([...ch.actual, ...ch.center]);
   const options = {
     responsive:true, maintainAspectRatio:false,
@@ -340,8 +317,7 @@ function renderDetailChart(it){
   detailChart = new Chart(document.getElementById("detailChart"), {type:"line", data, options});
 }
 
-/* 판매처/품목 상세에서 '발주에 담기' → 품목을 발주에 추가하고 발주 리스트로 이동
-   (지점 안 쪼갬 → 품목+수량만 담아요) */
+// 품목을 발주 리스트에 추가하고 발주 화면으로 이동
 function addToOrder(itemId){
   if (!myOrder.find(o => o.itemId === itemId)) myOrder.push({ itemId, qty:1 });
   saveCart(); updateCartBadge();
@@ -349,27 +325,14 @@ function addToOrder(itemId){
   showOrder();
 }
 
-/* =====================================================================
-   [7] 발주 리스트 화면 — 브랜드별 합산 TOP 3 (백엔드 API 변경 반영)
-      · today 모드 = 오늘 구매 / forecast 모드 = 2주 예측
-      · 농협·이마트·롯데 각각 '전부 이 브랜드에서' 살 때 합산 총액을 구해 싼 순서로.
-   실제 API 예: POST /order/recommend { items:[{id,qty}], mode:"today"|"forecast" }
-              → [ {brand, total, lines:[{name,qty,unitPrice}]}, ... ] (싼 순 정렬)
-===================================================================== */
+// 발주 리스트: 브랜드별 합산 가격 TOP 3
 const BRANDS = ["농협","이마트","롯데"];
 let orderMode = "today";
 
-/* =====================================================================
-   [API] 백엔드 연결 층  ★ 실제 서버와 연결되는 부분 ★
-   ---------------------------------------------------------------------
-   · USE_MOCK = 
-   · USE_MOCK = false → 실제 API 시도, 실패하면 자동으로 가짜 데이터로 폴백
-   백엔드를 로컬에서 켜고( 예: uvicorn ... ) 아래를 false 로 바꾸면 연결돼요.
-   기본 주소는 http://127.0.0.1:8000 (Swagger 화면 기준)
-===================================================================== */
+// 백엔드 API 연결 설정
 const API_BASE = "http://127.0.0.1:8000";
-let USE_MOCK = false;    // ← 백엔드 연결할 때 false 로 변경
-let DATA_LIVE = false;  // 실제 API 응답을 받았는지 (배너 표시용)
+let USE_MOCK = false;   
+let DATA_LIVE = false;   // 실제 API 응답 여부
 
 async function apiGet(path){
   const res = await fetch(API_BASE + path);
@@ -384,16 +347,16 @@ async function apiPost(path, body){
   return res.json();
 }
 
-/* --- 요청 함수 (요청 형식은 Swagger 기준으로 정확히 맞춤) --- */
+// API 요청 함수
 // 홈 신호: GET /signals
 async function fetchSignals(){ return apiGet("/signals"); }
-// 가격 추이: GET /prices/history?item_name=밀가루&brand=이마트  (brand 없으면 브랜드 평균)
+// 가격 추이: GET /prices/history
 async function fetchHistory(itemName, brand){
   const q = new URLSearchParams({ item_name: itemName });
   if (brand) q.set("brand", brand);
   return apiGet("/prices/history?" + q.toString());
 }
-// 발주 브랜드 TOP 3: POST /optimize/basket  { items:[{item_name,quantity}], mode }
+// 발주 브랜드 TOP 3: POST /optimize/basket
 async function fetchQuote(items, mode){
   return apiPost("/optimize/basket", {
     items: items.map(o => ({ item_name: byId(o.itemId).name, quantity: o.qty })),
@@ -403,10 +366,7 @@ async function fetchQuote(items, mode){
 // 상세 예측: POST /predict  { item_name, brand? }
 async function fetchPredict(itemName){ return apiPost("/predict", { item_name: itemName }); }
 
-/* --- 어댑터: 서버 응답 → 화면이 쓰는 모양으로 변환 (실제 코드 기준으로 확정) ---
-   응답 필드가 안 맞으면 자동으로 가짜 데이터로 폴백되니 화면은 안 깨져요. */
-
-// /optimize/basket 응답: { brands:[{brand,total,items:[{item_name,quantity,unit_price,amount}],rank}], savings, ... }
+// API 응답을 화면에서 사용하는 데이터 구조로 변환
 function adaptQuote(raw){
   const arr = (raw && raw.brands) || [];
   if(!arr.length) throw new Error("발주 응답 형식 불명");
@@ -414,8 +374,7 @@ function adaptQuote(raw){
     brand: r.brand,
     total: r.total,
     lines: (r.items || []).map(l => ({ name: l.item_name, qty: l.quantity, unit: l.unit_price }))
-  }));   // 백엔드가 이미 싼 순으로 정렬해서 줌
-}
+  }));   
 
 // /signals 응답: { as_of, items:[{item_name,current_price,signal:"BUY"|"WAIT"|"HOLD",message,drop_probability}] }
 const ADVICE_BY_SIGNAL = { BUY:"지금 구매 추천", WAIT:"구매 보류", HOLD:"관망" };
@@ -449,7 +408,7 @@ function adaptPredict(raw, it){
   it._predict = raw;   // 차트에서 예측 지점으로 사용
 }
 
-/* 데이터 출처 배너 갱신 */
+// 데이터 출처 배너 갱신 
 function updateBanner(){
   const el = document.getElementById("dsBanner");
   if(!el) return;
@@ -458,7 +417,7 @@ function updateBanner(){
       ? "🟡 예시 데이터 (시연 모드)" : "🟡 예시 데이터 (백엔드 미연결 — 자동 폴백)"; }
 }
 
-/* 처음 로드 시 실제 신호를 시도해서 홈을 최신화 */
+// 초기 로드 시 구매 신호 API 반영
 async function hydrate(){
   if(!USE_MOCK){
     try { applySignals(await fetchSignals()); DATA_LIVE = true; renderHome(); }
@@ -469,7 +428,7 @@ async function hydrate(){
 
 function showOrder(){ go("order"); renderOrder(); }
 
-// 가짜 데이터로 브랜드별 합산 TOP 3 계산 (백엔드 없을 때 폴백용)
+// 백엔드 미연결 시 목업 데이터로 브랜드별 합산 순위 계산
 function mockRanked(){
   return BRANDS.map(brand => {
     let total = 0;
@@ -486,7 +445,7 @@ function mockRanked(){
 async function renderOrder(){
   document.getElementById("orderCount").textContent = `${myOrder.length}개 품목 · 수량 조절 가능`;
 
-  // 왼쪽: 내가 담은 발주 (품목 + 수량)
+  // 선택한 발주 품목 렌더링
   document.getElementById("myOrderList").innerHTML = myOrder.map((o,i) => `
       <div class="oline">
         <div class="l1"><span class="oi">${byId(o.itemId).name}</span>
@@ -502,7 +461,7 @@ async function renderOrder(){
   document.getElementById("recSub").textContent =
     `${orderMode==="today"?"최근 조사가 기준":"2주 예측 기준"} · 한 브랜드에서 전부 구매할 때 합산 총액`;
 
-  // 오른쪽: 실제 API(POST /orders/auto) 시도 → 실패하면 가짜 계산으로 폴백
+  // 발주 최적화 API 호출, 실패 시 목업 데이터로 폴백
   let ranked;
   if (!USE_MOCK && myOrder.length){
     document.getElementById("recList").innerHTML = `<p class="muted" style="font-size:.85rem;">불러오는 중…</p>`;
@@ -526,7 +485,7 @@ async function renderOrder(){
       </div>`;
   }).join("");
 
-  // "최고가 대비 얼마 아꼈는지" 배지 — 브랜드가 2곳 이상 비교될 때만 보여줌
+  // 최고가 대비 절감액 표시
   const savingsBadge = document.getElementById("savingsBadge");
   if (savingsBadge){
     const worst = ranked.length ? ranked[ranked.length-1].total : 0;
@@ -549,7 +508,7 @@ function changeQty(i, d){
   renderOrder();
 }
 
-/* 발주 리스트에서 품목 하나를 완전히 빼기 (수량 줄이기와 별개로 "취소" 기능) */
+// 발주 품목 삭제
 function removeFromOrder(i){
   const removed = myOrder[i];
   if (!removed) return;
@@ -559,7 +518,7 @@ function removeFromOrder(i){
   renderOrder();
 }
 
-/* 오늘/예측 토글 */
+// 발주 가격 기준 모드 전환
 document.getElementById("orderMode").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
   orderMode = b.dataset.mode;
@@ -567,10 +526,7 @@ document.getElementById("orderMode").addEventListener("click", e => {
   renderOrder();
 });
 
-/* =====================================================================
-   [8] 처음 시작: 홈 화면
-===================================================================== */
 renderHome();
 go("home");
-updateCartBadge();  // 저장돼 있던 장바구니 개수 표시
-hydrate();   // USE_MOCK=false 이고 백엔드가 켜져 있으면 실제 신호로 최신화
+updateCartBadge();  
+hydrate();// 초기 API 데이터 반영
