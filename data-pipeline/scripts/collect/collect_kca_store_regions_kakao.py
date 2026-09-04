@@ -20,6 +20,7 @@ DEFAULT_ENV_PATH = PROJECT_ROOT / ".env"
 DEFAULT_INPUT_PATH = ROOT / "data" / "processed" / "kca" / "kca_stores.csv"
 DEFAULT_OUTPUT_PATH = ROOT / "data" / "processed" / "kca" / "kca_store_master.csv"
 DEFAULT_DEBUG_REPORT_PATH = ROOT / "reports" / "kca_store_region_match_debug.csv"
+DEFAULT_REJECTED_OUTPUT_PATH = ROOT / "reports" / "transform" / "kca_store_master_rejected.csv"
 DEFAULT_OVERRIDE_PATH = ROOT / "data" / "reference" / "kca" / "store_match_overrides.csv"
 REQUEST_TIMEOUT_SECONDS = 15
 INPUT_STORE_COLUMN = "source_store_name"
@@ -96,6 +97,7 @@ OUTPUT_COLUMNS = [
     "place_url",
 ]
 OUTPUT_COLUMN_SET = set(OUTPUT_COLUMNS)
+REJECTED_OUTPUT_COLUMNS = ["source_row_number", "reject_reason", *OUTPUT_COLUMNS]
 VALID_CATEGORY_GROUP_CODES = {"", "MT1", "CS2"}
 VALID_SEARCH_STAGES = {
     "fallback_alias",
@@ -942,15 +944,40 @@ def enriched_row(
     return output_row
 
 
-def write_rows(output_path: Path, rows: list[dict[str, str]]) -> None:
+def write_rows(
+    output_path: Path,
+    rows: list[dict[str, str]],
+    rejected_path: Path | None = None,
+) -> tuple[int, int]:
+    # A malformed row shape is an internal/file schema error, not row-level bad data.
     for row_number, row in enumerate(rows, start=1):
         validate_output_row_schema(row, row_number)
-        validate_output_row_values(row, row_number)
+
+    accepted_rows = []
+    rejected_rows = []
+    for row_number, row in enumerate(rows, start=1):
+        try:
+            validate_output_row_values(row, row_number)
+        except ValueError as exc:
+            rejected_rows.append(
+                {"source_row_number": str(row_number), "reject_reason": str(exc), **row}
+            )
+        else:
+            accepted_rows.append(row)
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding=CSV_ENCODING, newline="") as f:
         writer = csv.DictWriter(f, fieldnames=OUTPUT_COLUMNS, extrasaction="raise")
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows(accepted_rows)
+
+    rejected_output = rejected_path or output_path.with_name(f"{output_path.stem}_rejected.csv")
+    rejected_output.parent.mkdir(parents=True, exist_ok=True)
+    with rejected_output.open("w", encoding=CSV_ENCODING, newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=REJECTED_OUTPUT_COLUMNS, extrasaction="raise")
+        writer.writeheader()
+        writer.writerows(rejected_rows)
+    return len(accepted_rows), len(rejected_rows)
 
 
 def write_debug_rows(output_path: Path, rows: list[dict[str, str]]) -> None:
@@ -984,6 +1011,11 @@ def main() -> int:
         "--debug-report",
         default=str(DEFAULT_DEBUG_REPORT_PATH),
         help="CSV path for raw Kakao candidate match debug rows.",
+    )
+    parser.add_argument(
+        "--rejected-output",
+        default=str(DEFAULT_REJECTED_OUTPUT_PATH),
+        help="CSV path for row-level store master validation failures.",
     )
     parser.add_argument(
         "--overrides",
@@ -1174,7 +1206,11 @@ def main() -> int:
         for row in input_rows
         if row[INPUT_STORE_COLUMN] in merged_by_source_store_name
     ]
-    write_rows(output_path, output_rows)
+    accepted_count, rejected_count = write_rows(
+        output_path,
+        output_rows,
+        resolve_path(args.rejected_output),
+    )
     write_debug_rows(resolve_path(args.debug_report), debug_rows)
     print(
         json.dumps(
@@ -1182,6 +1218,8 @@ def main() -> int:
                 "existing_row_count": len(existing_by_source_store_name),
                 "new_row_count": len(new_output_rows),
                 "output_row_count": len(output_rows),
+                "processed_row_count": accepted_count,
+                "rejected_row_count": rejected_count,
                 "output": str(output_path),
                 "debug_report": str(resolve_path(args.debug_report)),
             },

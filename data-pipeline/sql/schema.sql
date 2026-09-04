@@ -55,8 +55,13 @@ CREATE TABLE IF NOT EXISTS region (
   parent_region_id BIGINT NULL,
   name VARCHAR(50) NOT NULL,
   region_type VARCHAR(20) NOT NULL,
+  root_region_name VARCHAR(100)
+    GENERATED ALWAYS AS (
+      CASE WHEN parent_region_id IS NULL THEN name ELSE NULL END
+    ) STORED,
   PRIMARY KEY (region_id),
   UNIQUE KEY uq_region_parent_name (parent_region_id, name),
+  UNIQUE KEY uq_region_root_name (root_region_name),
   CONSTRAINT fk_region_parent
     FOREIGN KEY (parent_region_id) REFERENCES region (region_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
@@ -72,7 +77,7 @@ CREATE TABLE IF NOT EXISTS store (
   validation_status VARCHAR(20) NOT NULL DEFAULT 'valid',
   region_id BIGINT NULL,
   PRIMARY KEY (store_id),
-  UNIQUE KEY uq_store_source_store_name (source_store_name),
+  UNIQUE KEY uq_store_retailer_source_store_name (retailer_id, source_store_name),
   UNIQUE KEY uq_store_retailer_name (retailer_id, name),
   CONSTRAINT fk_store_retailer
     FOREIGN KEY (retailer_id) REFERENCES retailer (retailer_id),
@@ -100,6 +105,34 @@ CREATE TABLE IF NOT EXISTS price_observation (
     FOREIGN KEY (product_id) REFERENCES product (product_id),
   CONSTRAINT fk_price_observation_store
     FOREIGN KEY (store_id) REFERENCES store (store_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS retailer_product_listing (
+  listing_id BIGINT NOT NULL AUTO_INCREMENT,
+  product_id BIGINT NOT NULL,
+  retailer_id BIGINT NOT NULL,
+  source_product_id VARCHAR(100) NOT NULL,
+  source_product_name VARCHAR(255) NOT NULL,
+  product_url VARCHAR(1000) NOT NULL,
+  PRIMARY KEY (listing_id),
+  UNIQUE KEY uq_retailer_listing_source (retailer_id, source_product_id),
+  CONSTRAINT fk_retailer_listing_product
+    FOREIGN KEY (product_id) REFERENCES product (product_id),
+  CONSTRAINT fk_retailer_listing_retailer
+    FOREIGN KEY (retailer_id) REFERENCES retailer (retailer_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS retailer_price_observation (
+  retailer_price_observation_id BIGINT NOT NULL AUTO_INCREMENT,
+  listing_id BIGINT NOT NULL,
+  collected_at DATETIME NOT NULL,
+  price INT NOT NULL,
+  promotion_type VARCHAR(30) NULL,
+  PRIMARY KEY (retailer_price_observation_id),
+  UNIQUE KEY uq_retailer_price_listing_collected (listing_id, collected_at),
+  KEY idx_retailer_price_observation_collected_at (collected_at),
+  CONSTRAINT fk_retailer_price_observation_listing
+    FOREIGN KEY (listing_id) REFERENCES retailer_product_listing (listing_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS kamis_item (

@@ -590,8 +590,8 @@ class StoreRegionOutputSchemaTest(unittest.TestCase):
         row["match_status"] = DOCUMENT["place_name"]
 
         with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaises(ValueError):
-                collect.write_rows(Path(directory) / "out.csv", [row])
+            accepted, rejected = collect.write_rows(Path(directory) / "out.csv", [row])
+        self.assertEqual((accepted, rejected), (0, 1))
 
     def test_write_rows_rejects_matched_without_valid_validation(self) -> None:
         row = collect.enriched_row(
@@ -610,8 +610,8 @@ class StoreRegionOutputSchemaTest(unittest.TestCase):
         row["validation_status"] = "not_checked"
 
         with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaises(ValueError):
-                collect.write_rows(Path(directory) / "out.csv", [row])
+            accepted, rejected = collect.write_rows(Path(directory) / "out.csv", [row])
+        self.assertEqual((accepted, rejected), (0, 1))
 
     def test_existing_matched_invalid_row_needs_refresh(self) -> None:
         row = collect.blank_output_row(
@@ -722,16 +722,16 @@ class StoreRegionOutputSchemaTest(unittest.TestCase):
         row["region_3depth_name"] = "대둔산로199번길"
 
         with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaises(ValueError):
-                collect.write_rows(Path(directory) / "out.csv", [row])
+            accepted, rejected = collect.write_rows(Path(directory) / "out.csv", [row])
+        self.assertEqual((accepted, rejected), (0, 1))
 
     def test_write_rows_rejects_parcel_number_region_depth(self) -> None:
         row = collect.enriched_row(BASE_ROW, DOCUMENT, "농협유통 창동점", "MT1", "primary_category", "matched")
         row["region_3depth_name"] = "1287"
 
         with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaises(ValueError):
-                collect.write_rows(Path(directory) / "out.csv", [row])
+            accepted, rejected = collect.write_rows(Path(directory) / "out.csv", [row])
+        self.assertEqual((accepted, rejected), (0, 1))
 
     def test_current_master_csv_has_no_semantically_shifted_rows(self) -> None:
         master_path = Path(__file__).resolve().parents[1] / "data" / "processed" / "kca" / "kca_store_master.csv"
@@ -822,6 +822,25 @@ class StoreRegionOutputSchemaTest(unittest.TestCase):
             with output_path.open("r", encoding="utf-8-sig", newline="") as f:
                 reader = csv.reader(f)
                 self.assertEqual(next(reader), collect.OUTPUT_COLUMNS)
+
+    def test_write_rows_separates_row_level_rejections(self) -> None:
+        valid = collect.enriched_row(BASE_ROW, DOCUMENT, "농협유통 창동점", "", "fallback_no_category", "matched")
+        invalid = dict(valid)
+        invalid["region_3depth_name"] = "1287"
+
+        with tempfile.TemporaryDirectory() as directory:
+            output_path = Path(directory) / "out.csv"
+            rejected_path = Path(directory) / "rejected.csv"
+            accepted, rejected = collect.write_rows(output_path, [valid, invalid], rejected_path)
+            with output_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                processed_rows = list(csv.DictReader(stream))
+            with rejected_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                rejected_rows = list(csv.DictReader(stream))
+
+        self.assertEqual((accepted, rejected), (1, 1))
+        self.assertEqual(len(processed_rows), 1)
+        self.assertEqual(rejected_rows[0]["source_row_number"], "2")
+        self.assertIn("region_3depth_name", rejected_rows[0]["reject_reason"])
 
 
 if __name__ == "__main__":

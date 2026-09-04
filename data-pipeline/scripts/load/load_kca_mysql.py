@@ -17,7 +17,9 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     Column,
+    Computed,
     Date,
+    DateTime,
     DECIMAL,
     ForeignKey,
     Integer,
@@ -101,11 +103,22 @@ product = Table(
     "product",
     metadata,
     Column("product_id", BigInteger, primary_key=True, autoincrement=True),
-    Column("source_product_name", String(255), nullable=False, unique=True),
+    Column("source_product_name", String(255), nullable=False),
     Column("manufacturer_id", BigInteger, ForeignKey("manufacturer.manufacturer_id")),
+    Column(
+        "manufacturer_id_for_unique",
+        BigInteger,
+        Computed("IFNULL(manufacturer_id, -1)", persisted=True),
+    ),
     Column("subtype_id", BigInteger, ForeignKey("item_subtype.subtype_id"), nullable=False),
     Column("quantity", DECIMAL(10, 2)),
     Column("unit", String(20)),
+    UniqueConstraint(
+        "source_product_name",
+        "manufacturer_id_for_unique",
+        "subtype_id",
+        name="uq_product_source_manufacturer_subtype",
+    ),
 )
 
 retailer = Table(
@@ -122,7 +135,13 @@ region = Table(
     Column("parent_region_id", BigInteger, ForeignKey("region.region_id")),
     Column("name", String(50), nullable=False),
     Column("region_type", String(20), nullable=False),
+    Column(
+        "root_region_name",
+        String(100),
+        Computed("CASE WHEN parent_region_id IS NULL THEN name ELSE NULL END", persisted=True),
+    ),
     UniqueConstraint("parent_region_id", "name", name="uq_region_parent_name"),
+    UniqueConstraint("root_region_name", name="uq_region_root_name"),
 )
 
 store = Table(
@@ -131,13 +150,18 @@ store = Table(
     Column("store_id", BigInteger, primary_key=True, autoincrement=True),
     Column("retailer_id", BigInteger, ForeignKey("retailer.retailer_id"), nullable=False),
     Column("name", String(255), nullable=False),
-    Column("source_store_name", String(255), nullable=False, unique=True),
+    Column("source_store_name", String(255), nullable=False),
     Column("store_type", String(20), nullable=False),
     Column("store_status", String(20), nullable=False),
     Column("match_status", String(20), nullable=False),
     Column("validation_status", String(20), nullable=False),
     Column("region_id", BigInteger, ForeignKey("region.region_id")),
     UniqueConstraint("retailer_id", "name", name="uq_store_retailer_name"),
+    UniqueConstraint(
+        "retailer_id",
+        "source_store_name",
+        name="uq_store_retailer_source_store_name",
+    ),
 )
 
 price_observation = Table(
@@ -152,6 +176,29 @@ price_observation = Table(
     Column("is_sale", Boolean),
     Column("is_one_plus_one", Boolean),
     UniqueConstraint("product_id", "store_id", "survey_date", name="uq_price_product_store_date"),
+)
+
+retailer_product_listing = Table(
+    "retailer_product_listing",
+    metadata,
+    Column("listing_id", BigInteger, primary_key=True, autoincrement=True),
+    Column("product_id", BigInteger, ForeignKey("product.product_id"), nullable=False),
+    Column("retailer_id", BigInteger, ForeignKey("retailer.retailer_id"), nullable=False),
+    Column("source_product_id", String(100), nullable=False),
+    Column("source_product_name", String(255), nullable=False),
+    Column("product_url", String(1000), nullable=False),
+    UniqueConstraint("retailer_id", "source_product_id", name="uq_retailer_listing_source"),
+)
+
+retailer_price_observation = Table(
+    "retailer_price_observation",
+    metadata,
+    Column("retailer_price_observation_id", BigInteger, primary_key=True, autoincrement=True),
+    Column("listing_id", BigInteger, ForeignKey("retailer_product_listing.listing_id"), nullable=False),
+    Column("collected_at", DateTime, nullable=False),
+    Column("price", Integer, nullable=False),
+    Column("promotion_type", String(30)),
+    UniqueConstraint("listing_id", "collected_at", name="uq_retailer_price_listing_collected"),
 )
 
 fis_item = Table(

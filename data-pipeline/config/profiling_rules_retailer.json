@@ -1,0 +1,19 @@
+{
+  "dataset": "retailer_online_price",
+  "encoding_candidates": ["utf-8-sig"],
+  "required_columns": [
+    "collected_at", "source", "product_key", "item_id", "item_name",
+    "brand_name", "sale_price", "promotion_type", "product_url"
+  ],
+  "product_mapping": {
+    "egg": "계란",
+    "milk": "우유",
+    "sugar": "설탕",
+    "flour": "밀가루",
+    "butter": "버터"
+  },
+  "retailer_mapping": {
+    "LOTTEMART_ZETTA": "롯데마트",
+    "NONGHYUP_MALL": "농협몰"
+  }
+}

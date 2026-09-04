@@ -112,10 +112,12 @@ def main() -> int:
         conn.execute(text("ALTER TABLE store MODIFY source_store_name VARCHAR(255) NOT NULL"))
 
         inspector = inspect(conn)
-        if not index_exists(inspector, "store", "uq_store_source_store_name"):
-            conn.execute(
-                text("ALTER TABLE store ADD UNIQUE KEY uq_store_source_store_name (source_store_name)")
-            )
+        if not index_exists(inspector, "store", "uq_store_retailer_source_store_name"):
+            conn.execute(text(
+                "ALTER TABLE store ADD UNIQUE KEY "
+                "uq_store_retailer_source_store_name (retailer_id, source_store_name)"
+            ))
+        drop_index_if_exists(conn, "store", "uq_store_source_store_name")
         if not index_exists(inspector, "store", "uq_store_retailer_name"):
             conn.execute(text("ALTER TABLE store ADD UNIQUE KEY uq_store_retailer_name (retailer_id, name)"))
         if not foreign_key_exists(inspector, "store", "fk_store_retailer"):

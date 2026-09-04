@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, tuple_
 from sqlalchemy import inspect, text
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.engine import Connection, Engine
@@ -257,14 +257,9 @@ def read_store_master_rows(path: Path, log_path: Path) -> tuple[list[StoreMaster
             if not store_branch_name:
                 missing.append("store_branch_name")
             if missing:
-                failed += 1
-                log_failure(
-                    log_path,
-                    "store",
-                    f"row {row_number}: missing required values {missing}",
-                    {"row_number": row_number, "row": row},
+                raise MissingRequiredValueError(
+                    f"{path} row {row_number} is missing required values: {missing}"
                 )
-                continue
             match_status = clean_text(row.get("match_status"))
             rows.append(
                 StoreMasterRow(
@@ -286,9 +281,20 @@ def read_store_master_rows(path: Path, log_path: Path) -> tuple[list[StoreMaster
 def ensure_store_match_columns(engine: Engine) -> None:
     metadata.create_all(engine, tables=[region])
     inspector = inspect(engine)
+    region_columns = {column["name"] for column in inspector.get_columns("region")}
+    region_indexes = {index["name"] for index in inspector.get_indexes("region")}
+    with engine.begin() as conn:
+        if "root_region_name" not in region_columns:
+            conn.execute(text(
+                "ALTER TABLE region ADD COLUMN root_region_name VARCHAR(100) "
+                "GENERATED ALWAYS AS (CASE WHEN parent_region_id IS NULL THEN name ELSE NULL END) STORED"
+            ))
+        if "uq_region_root_name" not in region_indexes:
+            conn.execute(text("ALTER TABLE region ADD UNIQUE KEY uq_region_root_name (root_region_name)"))
     if "store" not in inspector.get_table_names():
         return
     column_names = {column["name"] for column in inspector.get_columns("store")}
+    store_indexes = {index["name"] for index in inspector.get_indexes("store")}
     with engine.begin() as conn:
         if "store_type" not in column_names:
             conn.execute(text("ALTER TABLE store ADD COLUMN store_type VARCHAR(20) NOT NULL DEFAULT 'BRANCH' AFTER source_store_name"))
@@ -300,10 +306,31 @@ def ensure_store_match_columns(engine: Engine) -> None:
             conn.execute(text("ALTER TABLE store ADD COLUMN validation_status VARCHAR(20) NOT NULL DEFAULT 'valid' AFTER match_status"))
         if "region_id" not in column_names:
             conn.execute(text("ALTER TABLE store ADD COLUMN region_id BIGINT NULL AFTER validation_status"))
+        if "uq_store_retailer_source_store_name" not in store_indexes:
+            conn.execute(text(
+                "ALTER TABLE store ADD UNIQUE KEY "
+                "uq_store_retailer_source_store_name (retailer_id, source_store_name)"
+            ))
+        if "uq_store_source_store_name" in store_indexes:
+            conn.execute(text("ALTER TABLE store DROP INDEX uq_store_source_store_name"))
+
+
+def existing_store_key_map(
+    conn: Connection,
+    keys: Sequence[tuple[int, str]],
+) -> dict[tuple[int, str], int]:
+    if not keys:
+        return {}
+    rows = conn.execute(
+        select(store.c.retailer_id, store.c.source_store_name, store.c.store_id).where(
+            tuple_(store.c.retailer_id, store.c.source_store_name).in_(list(set(keys)))
+        )
+    )
+    return {(retailer_id, source_name): store_id for retailer_id, source_name, store_id in rows}
 
 
 def load_retailers(
-    engine: Engine,
+    conn: Connection,
     table_report: TableReport,
     rows: Sequence[StoreMasterRow],
     batch_size: int,
@@ -313,23 +340,10 @@ def load_retailers(
         ["name"],
     )
     table_report.input_rows = len(retailer_rows)
-    with engine.begin() as conn:
-        existing_before = existing_single_key_map(
-            conn,
-            retailer,
-            "retailer_id",
-            "name",
-            [row["name"] for row in retailer_rows],
-        )
-        to_insert = [row for row in retailer_rows if row["name"] not in existing_before]
-        insert_ignore_existing(conn, retailer, to_insert, "name", batch_size)
-        existing_after = existing_single_key_map(
-            conn,
-            retailer,
-            "retailer_id",
-            "name",
-            [row["name"] for row in retailer_rows],
-        )
+    existing_before = existing_single_key_map(conn, retailer, "retailer_id", "name", [row["name"] for row in retailer_rows])
+    to_insert = [row for row in retailer_rows if row["name"] not in existing_before]
+    insert_ignore_existing(conn, retailer, to_insert, "name", batch_size)
+    existing_after = existing_single_key_map(conn, retailer, "retailer_id", "name", [row["name"] for row in retailer_rows])
     table_report.inserted = len(set(existing_after) - set(existing_before))
     table_report.skipped = table_report.input_rows - table_report.inserted
     return existing_after
@@ -349,12 +363,13 @@ def load_region_level(
         if (row["parent_region_id"], row["name"]) not in existing_before
     ]
     if to_insert:
-        conn.execute(mysql_insert(region).values(to_insert))
+        statement = mysql_insert(region).values(to_insert)
+        conn.execute(statement.on_duplicate_key_update(name=region.c.name))
     return existing_region_key_map(conn, keys)
 
 
 def load_regions(
-    engine: Engine,
+    conn: Connection,
     table_report: TableReport,
     rows: Sequence[StoreMasterRow],
 ) -> dict[tuple[str, ...], int]:
@@ -373,35 +388,34 @@ def load_regions(
         }
     )
 
-    with engine.begin() as conn:
-        before_count = int(conn.execute(select(func.count()).select_from(region)).scalar_one())
-        path_ids: dict[tuple[str, ...], int] = {}
-        max_depth = max((len(path) for path in region_paths), default=0)
-        for depth in range(max_depth):
-            level_rows = []
-            for path in region_paths:
-                if len(path) <= depth:
-                    continue
-                region_type_name, name = path[depth]
-                parent_path = tuple(region_name for _, region_name in path[:depth])
-                level_rows.append(
-                    {
-                        "parent_region_id": path_ids.get(parent_path),
-                        "name": name,
-                        "region_type": region_type_name,
-                    }
-                )
-            level_ids = load_region_level(conn, level_rows)
-            for path in region_paths:
-                if len(path) <= depth:
-                    continue
-                parent_path = tuple(region_name for _, region_name in path[:depth])
-                path_key = tuple(region_name for _, region_name in path[: depth + 1])
-                name = path[depth][1]
-                parent_id = path_ids.get(parent_path)
-                path_ids[path_key] = level_ids[(parent_id, name)]
+    before_count = int(conn.execute(select(func.count()).select_from(region)).scalar_one())
+    path_ids: dict[tuple[str, ...], int] = {}
+    max_depth = max((len(path) for path in region_paths), default=0)
+    for depth in range(max_depth):
+        level_rows = []
+        for path in region_paths:
+            if len(path) <= depth:
+                continue
+            region_type_name, name = path[depth]
+            parent_path = tuple(region_name for _, region_name in path[:depth])
+            level_rows.append(
+                {
+                    "parent_region_id": path_ids.get(parent_path),
+                    "name": name,
+                    "region_type": region_type_name,
+                }
+            )
+        level_ids = load_region_level(conn, level_rows)
+        for path in region_paths:
+            if len(path) <= depth:
+                continue
+            parent_path = tuple(region_name for _, region_name in path[:depth])
+            path_key = tuple(region_name for _, region_name in path[: depth + 1])
+            name = path[depth][1]
+            parent_id = path_ids.get(parent_path)
+            path_ids[path_key] = level_ids[(parent_id, name)]
 
-        after_count = int(conn.execute(select(func.count()).select_from(region)).scalar_one())
+    after_count = int(conn.execute(select(func.count()).select_from(region)).scalar_one())
 
     table_report.inserted = max(0, after_count - before_count)
     table_report.skipped = table_report.input_rows - table_report.inserted
@@ -428,7 +442,7 @@ def store_row_payload(
 
 
 def upsert_stores(
-    engine: Engine,
+    conn: Connection,
     table_report: TableReport,
     rows: Sequence[StoreMasterRow],
     retailer_ids: dict[str, int],
@@ -450,38 +464,49 @@ def upsert_stores(
             continue
         store_rows.append(store_row_payload(row, retailer_id, region_ids))
 
-    store_rows = unique_dicts(store_rows, ["source_store_name"])
+    store_rows = unique_dicts(store_rows, ["retailer_id", "source_store_name"])
     table_report.input_rows = len(store_rows)
-    with engine.begin() as conn:
-        existing_before = existing_single_key_map(
-            conn,
-            store,
-            "store_id",
-            "source_store_name",
-            [row["source_store_name"] for row in store_rows],
+    store_keys = [(row["retailer_id"], row["source_store_name"]) for row in store_rows]
+    existing_before = existing_store_key_map(conn, store_keys)
+    for batch_start in range(0, len(store_rows), batch_size):
+        batch = store_rows[batch_start : batch_start + batch_size]
+        statement = mysql_insert(store).values(batch)
+        statement = statement.on_duplicate_key_update(
+            retailer_id=statement.inserted.retailer_id,
+            name=statement.inserted.name,
+            store_type=statement.inserted.store_type,
+            store_status=statement.inserted.store_status,
+            match_status=statement.inserted.match_status,
+            validation_status=statement.inserted.validation_status,
+            region_id=statement.inserted.region_id,
         )
-        for batch_start in range(0, len(store_rows), batch_size):
-            batch = store_rows[batch_start : batch_start + batch_size]
-            statement = mysql_insert(store).values(batch)
-            statement = statement.on_duplicate_key_update(
-                retailer_id=statement.inserted.retailer_id,
-                name=statement.inserted.name,
-                store_type=statement.inserted.store_type,
-                store_status=statement.inserted.store_status,
-                match_status=statement.inserted.match_status,
-                validation_status=statement.inserted.validation_status,
-                region_id=statement.inserted.region_id,
-            )
-            conn.execute(statement)
-        existing_after = existing_single_key_map(
-            conn,
-            store,
-            "store_id",
-            "source_store_name",
-            [row["source_store_name"] for row in store_rows],
-        )
+        conn.execute(statement)
+    existing_after = existing_store_key_map(conn, store_keys)
     table_report.inserted = len(set(existing_after) - set(existing_before))
     table_report.skipped = table_report.input_rows - table_report.inserted
+
+
+def load_store_master_staged(
+    engine: Engine,
+    report: LoadReport,
+    rows: Sequence[StoreMasterRow],
+    batch_size: int,
+    log_path: Path,
+) -> None:
+    with engine.begin() as conn:
+        retailer_ids = load_retailers(conn, report.tables["retailer"], rows, batch_size)
+    with engine.begin() as conn:
+        region_ids = load_regions(conn, report.tables["region"], rows)
+    with engine.begin() as conn:
+        upsert_stores(
+            conn,
+            report.tables["store"],
+            rows,
+            retailer_ids,
+            region_ids,
+            batch_size,
+            log_path,
+        )
 
 
 def run_load(
@@ -508,17 +533,7 @@ def run_load(
 
     rows, input_failed = read_store_master_rows(input_path, log_path)
     report.tables["store"].failed += input_failed
-    retailer_ids = load_retailers(engine, report.tables["retailer"], rows, batch_size)
-    region_ids = load_regions(engine, report.tables["region"], rows)
-    upsert_stores(
-        engine,
-        report.tables["store"],
-        rows,
-        retailer_ids,
-        region_ids,
-        batch_size,
-        log_path,
-    )
+    load_store_master_staged(engine, report, rows, batch_size, log_path)
     (report_dir / "kca_store_load_report.json").write_text(
         json.dumps(report.as_dict(), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
