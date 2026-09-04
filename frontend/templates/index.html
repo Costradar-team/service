@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>원가레이더 프로토타입</title>
+
+<!--
+====================================================================
+ 원가레이더 - 화면 프로토타입 (와이어프레임 구성 반영 / 초보자용 주석)
+--------------------------------------------------------------------
+ 화면 4개가 한 파일에 들어있고, 버튼을 누르면 서로 넘어가요.
+   [홈]  → 구매 타이밍 신호 카드 + 품목 바로가기
+   [품목 상세] → BUY/WAIT 신호 + 가격 추이/예측 차트 + 판매처별 시세
+   [지점별 시세] → 한 브랜드의 지점들 가격 (지점 단위)
+   [발주 리스트] → 내가 담은 발주  vs  최적 조합 추천
+
+ ★ 데이터는 전부 가짜(MOCK_DB) ★  나중에 이 부분만 백엔드/AI API로 교체.
+
+ 우리가 논의한 내용 반영:
+  · 브랜드 = 농협 / 이마트 / 롯데 (회의 확정)
+  · 수량 '단위(kg/판/개)'는 데이터 확정 후 표시 → 지금은 '단위 확인필요'
+  · 예측값·BUY/WAIT = AI/ML 값, 크롤링 연동 전엔 예측 기준
+  · 판매처/지점 시세 = 지점(store) 단위 데이터 필요 → 백엔드 확인 대상
+  · 최적 조합은 여러 지점으로 나뉠 수 있어 배송비 별도 (미포함) 안내
+====================================================================
+-->
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.3/chart.umd.min.js"></script>
+
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ================= 홈 화면 ================= -->
+  <section id="view-home">
+    <div id="dsBanner" class="ds mock">원가레이더</div>
+    <input class="search" placeholder=" 품목·브랜드 검색">
+
+    <div class="section-head">
+      <h2>주요 원자재 구매 타이밍 신호 <span class="ai">AI 예측 레이어</span></h2>
+      <a class="link" onclick="go('signal')">신호 기준 →</a>
+    </div>
+    <div class="signal-grid" id="signalGrid"></div>
+
+    <div class="section-head">
+      <h2>품목 바로가기</h2>
+    </div>
+    <div class="item-grid" id="itemGrid"></div>
+
+    <p class="foot-note">※ 신호·확률·예측·가격은 모두 예시 데이터예요. 실제 값은 백엔드(가격)와 AI/ML(예측·신호)이 연결되면 채워집니다.</p>
+  </section>
+
+  <!-- ================= 신호 기준 화면 (지금은 빈 안내 페이지) ================= -->
+  <section id="view-signal" hidden>
+    <div class="crumb">
+      <button class="back" onclick="go('home')">← 이전 페이지</button>
+      <span class="sep">/</span>
+      <span class="note">신호 기준</span>
+    </div>
+    <h1 class="title">BUY / WAIT 신호는 어떻게 정해지나요?</h1>
+    <div class="card" style="padding:36px 28px; margin-top:14px; text-align:center;">
+      <p class="muted" style="margin:0 0 8px;">이 페이지에는 신호 판단 기준 설명이 들어갈 예정이에요.</p>
+      <p class="muted" style="font-size:.82rem; margin:0;">※ BUY/WAIT과 하락 확률을 계산하는 로직은 AI/ML 팀에서 확정 후 채워집니다. (현재 준비 중)</p>
+    </div>
+  </section>
+
+  <!-- ================= 품목 상세 화면 ================= -->
+  <section id="view-detail" hidden>
+    <div class="crumb">
+      <button class="back" onclick="go('home')">← 이전 페이지</button>
+      <span class="sep">/</span>
+      <div class="itemtabs" id="detailTabs"></div>
+    </div>
+    <div class="detail-grid">
+      <div>
+        <div class="bigsig" id="bigsig"></div>
+        <div class="card" style="margin-top:16px;">
+          <h3>가격 추이 · 예측 <span class="lg">— 실제  ·· 예측 구간(상·하한)</span></h3>
+          <div class="chart-box"><canvas id="detailChart"></canvas></div>
+        </div>
+      </div>
+      <div>
+        <h3 style="font-size:.98rem; margin:2px 0 2px;">판매처별 최근 시세</h3>
+        <p class="muted" style="font-size:.78rem; margin:0 0 12px;" id="quoteDate"></p>
+        <div class="quote-note">지금 꼭 사야 한다면 아래 브랜드별 최저가를 확인하세요.</div>
+        <div id="quoteList"></div>
+        <p class="disc">※ 상품 가격 기준 · 배송비 미포함</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 발주 리스트 화면 (브랜드 합산 TOP 3 / 백엔드 변경 반영) ================= -->
+  <section id="view-order" hidden>
+    <div class="crumb">
+      <button class="back" onclick="go('home')">←</button>
+      <h1 class="title" style="font-size:1.2rem;">발주 리스트</h1>
+    </div>
+    <p class="muted" style="font-size:.85rem; margin:-10px 0 20px;">품목과 수량을 담으면 농협/이마트/롯데 중 <b>한 곳에서 다 살 때</b> 제일 싼 순서로 알려드려요.</p>
+    <div class="order-grid">
+      <!-- 내가 담은 발주 + 오늘/예측 토글 -->
+      <div class="col">
+        <div class="ch"><h2>내가 담은 발주</h2></div>
+        <p class="sub" id="orderCount"></p>
+        <div class="toggle" id="orderMode">
+          <button data-mode="today" class="on">오늘 구매</button>
+          <button data-mode="forecast">2주 예측</button>
+        </div>
+        <div id="myOrderList" style="margin-top:14px;"></div>
+        <button class="addbtn" onclick="go('home')">+ 품목 추가</button>
+      </div>
+      <!-- 브랜드별 합산 최저가 TOP 3 -->
+      <div class="col rec">
+        <div class="ch"><h2>브랜드별 합산 TOP 3</h2></div>
+        <p class="sub" id="recSub"></p>
+        <div id="recList"></div>
+        <div class="foot">
+          <button class="buy-btn go" id="orderBuyBtn">1위 브랜드로 구매</button>
+          <p class="disc">※ 상품 가격 합산 기준 · 배송비는 3만원 이하 구매시 3천원이 추가됩니다. 한 브랜드에서 모두 구매하는 조합이에요!</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</div>
+<div class="toast" id="toast"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
