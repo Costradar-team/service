@@ -26,28 +26,47 @@
 ====================================================================
 -->
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.3/chart.umd.min.js"></script>
+<!-- Chart.js를 CDN 대신 static/vendor에 직접 넣어서 씀 (학교/사내망에서 cdnjs가 막히면
+     그래프가 안 보였던 문제 때문 — 인터넷 연결 상태와 상관없이 항상 뜨도록) -->
+<script src="/static/vendor/chart.umd.js"></script>
 
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+
+<!-- ================= 왼쪽 사이드바 (마우스 올리면 펼쳐짐) ================= -->
+<nav class="sidenav" id="sidenav">
+  <div class="sidenav-top">
+    <span class="dot"></span><span class="brand-name">원가레이더</span>
+  </div>
+  <button class="nav-item" onclick="go('home')" title="홈">
+    <svg viewBox="0 0 24 24"><path d="M4 11.5 12 4l8 7.5"/><path d="M6 10v9h12v-9"/><path d="M10 19v-5h4v5"/></svg>
+    <span class="lbl">홈</span>
+  </button>
+  <button class="nav-item" onclick="showOrder()" title="장바구니">
+    <svg viewBox="0 0 24 24"><path d="M6 8h12l-1 12H7L6 8Z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/></svg>
+    <span class="lbl">장바구니</span>
+    <span class="badge" id="cartBadgeSide" hidden>0</span>
+  </button>
+</nav>
+
 <div class="wrap">
 
   <!-- ================= 홈 화면 ================= -->
   <section id="view-home">
-    <div id="dsBanner" class="ds mock">원가레이더</div>
-    <input class="search" placeholder=" 품목·브랜드 검색">
+    <div class="home-topbar">
+      <div id="dsBanner" class="ds mock">원가레이더</div>
+      <button class="cart-btn" onclick="showOrder()" title="장바구니">
+        <svg viewBox="0 0 24 24"><path d="M6 8h12l-1 12H7L6 8Z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/></svg>
+        <span class="badge" id="cartBadgeTop" hidden>0</span>
+      </button>
+    </div>
 
     <div class="section-head">
       <h2>주요 원자재 구매 타이밍 신호 <span class="ai">AI 예측 레이어</span></h2>
       <a class="link" onclick="go('signal')">신호 기준 →</a>
     </div>
     <div class="signal-grid" id="signalGrid"></div>
-
-    <div class="section-head">
-      <h2>품목 바로가기</h2>
-    </div>
-    <div class="item-grid" id="itemGrid"></div>
 
     <p class="foot-note">※ 신호·확률·예측·가격은 모두 예시 데이터예요. 실제 값은 백엔드(가격)와 AI/ML(예측·신호)이 연결되면 채워집니다.</p>
   </section>
@@ -59,10 +78,15 @@
       <span class="sep">/</span>
       <span class="note">신호 기준</span>
     </div>
-    <h1 class="title">BUY / WAIT 신호는 어떻게 정해지나요?</h1>
-    <div class="card" style="padding:36px 28px; margin-top:14px; text-align:center;">
-      <p class="muted" style="margin:0 0 8px;">이 페이지에는 신호 판단 기준 설명이 들어갈 예정이에요.</p>
-      <p class="muted" style="font-size:.82rem; margin:0;">※ BUY/WAIT과 하락 확률을 계산하는 로직은 AI/ML 팀에서 확정 후 채워집니다. (현재 준비 중)</p>
+    <h1 class="title">BUY / WAIT / HOLD 신호는 어떻게 정해지나요?</h1>
+    <div class="card" style="padding:28px; margin-top:14px;">
+      <p style="margin:0 0 14px;">지금 서버(백엔드)가 실제로 계산하는 방식은 이래요 — 가장 최근 조사가격과 2주 뒤 예측가격을 비교해요.</p>
+      <ul style="margin:0 0 14px; padding-left:20px; font-size:.9rem; line-height:1.9;">
+        <li><b style="color:var(--green)">BUY</b> — 2주 뒤 예측가가 지금보다 <b>3% 이상</b> 오를 것으로 보일 때</li>
+        <li><b style="color:var(--amber)">WAIT</b> — 2주 뒤 예측가가 지금보다 <b>3% 이상</b> 내릴 것으로 보일 때</li>
+        <li><b class="muted">HOLD</b> — 위 두 경우가 아닐 때 (변동이 크지 않을 때)</li>
+      </ul>
+      <p class="muted" style="font-size:.82rem; margin:0;">※ 화면에 보이는 "하락/상승 확률 %"는 AI/ML 팀이 예측한 품목별 실제 확률이에요. (다만 특정 품목에 예측 데이터가 없을 때는 신호별 기본값 BUY 65% · WAIT 55% · HOLD 40%로 대신 보여줘요.)</p>
     </div>
   </section>
 
@@ -78,7 +102,10 @@
         <div class="bigsig" id="bigsig"></div>
         <div class="card" style="margin-top:16px;">
           <h3>가격 추이 · 예측 <span class="lg">— 실제  ·· 예측 구간(상·하한)</span></h3>
-          <div class="chart-box"><canvas id="detailChart"></canvas></div>
+          <div class="chart-box">
+            <canvas id="detailChart"></canvas>
+            <p class="chart-error" id="chartError" hidden>그래프를 불러오지 못했어요. (차트 라이브러리 로딩 실패 — 인터넷 연결을 확인하거나 새로고침 해보세요)</p>
+          </div>
         </div>
       </div>
       <div>
@@ -112,12 +139,12 @@
       </div>
       <!-- 브랜드별 합산 최저가 TOP 3 -->
       <div class="col rec">
-        <div class="ch"><h2>브랜드별 합산 TOP 3</h2></div>
+        <div class="ch"><h2>브랜드별 합산 TOP 3</h2><span class="save" id="savingsBadge" hidden></span></div>
         <p class="sub" id="recSub"></p>
         <div id="recList"></div>
         <div class="foot">
           <button class="buy-btn go" id="orderBuyBtn">1위 브랜드로 구매</button>
-          <p class="disc">※ 상품 가격 합산 기준 · 배송비는 3만원 이하 구매시 3천원이 추가됩니다. 한 브랜드에서 모두 구매하는 조합이에요!</p>
+          <p class="disc">※ 공개 시세 기준 참고용이며 실시간 마트 가격이 아니에요. 온라인 구매를 가정하며, 농협·이마트·롯데 브랜드 안에서만 조합하고 지점은 나누지 않아요. 배송비는 이 금액에 포함되어 있지 않아요.</p>
         </div>
       </div>
     </div>
