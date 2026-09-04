@@ -219,6 +219,7 @@ __marimo__/
 
 # Generated data pipeline reports
 data-pipeline/reports/*
+reports/
 
 # Local AI zip extract (store JSON is large; do not commit)
 tmp-forecast/

@@ -1,6 +1,8 @@
 requests>=2.32.0
+playwright>=1.52,<2
 pandas>=2.2,<4
 PyMySQL>=1.1.0
-SQLAlchemy>=2.0.0
+# Airflow 2.10.x is not compatible with SQLAlchemy 2.x.
+SQLAlchemy>=1.4.49,<2.0
 scikit-learn>=1.6,<2
 joblib>=1.4,<2

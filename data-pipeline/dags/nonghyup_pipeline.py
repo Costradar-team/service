@@ -34,27 +34,24 @@ def run_python_script(script_path: str, *args: str) -> None:
 
 
 with DAG(
-    dag_id="cost_radar_kamis_daily_etl",
-    description="Run the existing KAMIS extract, transform, and load scripts daily.",
+    dag_id="cost_radar_nonghyup_daily_etl",
+    description="Collect, transform, and load Nonghyup Mall online prices daily.",
     default_args=DEFAULT_ARGS,
     start_date=datetime(2026, 9, 1, tzinfo=LOCAL_TZ),
-    schedule="30 3 * * *",
+    schedule="30 4 * * *",
     catchup=False,
     dagrun_timeout=timedelta(hours=2),
-    tags=["cost_radar", "kamis", "etl"],
+    tags=["cost_radar", "nonghyup", "retailer", "etl"],
     user_defined_filters={"safe_run_id": safe_run_id},
-) as kamis_daily_etl:
+) as nonghyup_daily_etl:
     extract = PythonOperator(
         task_id="extract",
         python_callable=run_python_script,
         op_args=[
-            "scripts/collect/collect_kamis.py",
-            "--start-date",
-            "{{ (data_interval_end - macros.timedelta(days=1)).strftime('%Y-%m-%d') }}",
-            "--end-date",
-            "{{ (data_interval_end - macros.timedelta(days=1)).strftime('%Y-%m-%d') }}",
+            "scripts/collect/collect_nonghyupmall.py",
+            "--headless",
             "--output-dir",
-            "data/raw/kamis/dag_runs/{{ run_id | safe_run_id }}",
+            "data/raw/nonghyup/dag_runs/{{ run_id | safe_run_id }}",
         ],
     )
 
@@ -62,12 +59,12 @@ with DAG(
         task_id="transform",
         python_callable=run_python_script,
         op_args=[
-            "scripts/transform/transform_kamis.py",
-            "data/raw/kamis/dag_runs/{{ run_id | safe_run_id }}",
+            "scripts/transform/transform_retailer.py",
+            "data/raw/nonghyup/dag_runs/{{ run_id | safe_run_id }}",
             "--output-dir",
-            "data/processed/kamis/dag_runs/{{ run_id | safe_run_id }}",
-            "--report-dir",
-            "reports/transform/kamis/dag_runs/{{ run_id | safe_run_id }}",
+            "data/processed/retailer/nonghyup/dag_runs/{{ run_id | safe_run_id }}",
+            "--report",
+            "reports/transform/nonghyup/dag_runs/{{ run_id | safe_run_id }}/transform_summary.json",
         ],
     )
 
@@ -75,13 +72,13 @@ with DAG(
         task_id="load",
         python_callable=run_python_script,
         op_args=[
-            "scripts/load/load_kamis.py",
-            "--items",
-            "data/processed/kamis/dag_runs/{{ run_id | safe_run_id }}/kamis_item.csv",
-            "--observations",
-            "data/processed/kamis/dag_runs/{{ run_id | safe_run_id }}/kamis_price_observation.csv",
+            "scripts/load/load_retailer_mysql.py",
+            "--listing-input",
+            "data/processed/retailer/nonghyup/dag_runs/{{ run_id | safe_run_id }}/retailer_product_listing.csv",
+            "--observation-input",
+            "data/processed/retailer/nonghyup/dag_runs/{{ run_id | safe_run_id }}/retailer_price_observation.csv",
             "--report-dir",
-            "reports/load/kamis/dag_runs/{{ run_id | safe_run_id }}",
+            "reports/load/nonghyup/dag_runs/{{ run_id | safe_run_id }}",
         ],
     )
 
