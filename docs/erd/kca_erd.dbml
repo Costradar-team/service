@@ -29,7 +29,7 @@ Table product {
   unit varchar(20)
 
   indexes {
-    (source_product_name) [unique]
+    (source_product_name, manufacturer_id, subtype_id) [unique]
   }
 }
 
@@ -53,8 +53,12 @@ Table region {
   // SIDO, SI, GUN, GU, EUP, MYEON, DONG, RI 등
   region_type varchar(20) [not null]
 
+  // MySQL에서 NULL 부모를 가진 root 이름의 중복을 막기 위한 generated column
+  root_region_name varchar(100) [note: 'CASE WHEN parent_region_id IS NULL THEN name ELSE NULL END, STORED']
+
   indexes {
     (parent_region_id, name) [unique]
+    (root_region_name) [unique]
   }
 
   Note: '지역 계층. 예: 서울 > 강남구, 경기 > 성남시 > 분당구'
@@ -65,7 +69,7 @@ Table store {
   retailer_id bigint [not null]
 
   name varchar(255) [not null]
-  source_store_name varchar(255) [not null, unique]
+  source_store_name varchar(255) [not null]
 
   // BRANCH: 실제 개별 지점
   // CHAIN_LEVEL: 특정 지점이 아닌 체인 단위 가격
@@ -86,6 +90,7 @@ Table store {
 
   indexes {
     (retailer_id, name) [unique]
+    (retailer_id, source_store_name) [unique]
   }
 
   Note: '''
@@ -226,6 +231,36 @@ Table kamis_price_observation {
   }
 }
 
+Table retailer_product_listing {
+  listing_id bigint [pk, increment]
+
+  product_id bigint [not null]
+  retailer_id bigint [not null]
+
+  source_product_id varchar(100) [not null]
+  source_product_name varchar(255) [not null]
+  product_url varchar(1000) [not null]
+
+  indexes {
+    (retailer_id, source_product_id) [unique]
+  }
+}
+
+Table retailer_price_observation {
+  retailer_price_observation_id bigint [pk, increment]
+
+  listing_id bigint [not null]
+  collected_at datetime [not null]
+
+  price int [not null]
+  promotion_type varchar(30)
+
+  indexes {
+    (listing_id, collected_at) [unique]
+    collected_at
+  }
+}
+
 
 
 Ref: item_subtype.canonical_item_id > canonical_item.canonical_item_id
@@ -245,3 +280,7 @@ Ref: kamis_price_observation.kamis_item_id > kamis_item.kamis_item_id
 
 Ref: region.parent_region_id > region.region_id
 Ref: store.region_id > region.region_id
+
+Ref: retailer_product_listing.product_id > product.product_id
+Ref: retailer_product_listing.retailer_id > retailer.retailer_id
+Ref: retailer_price_observation.listing_id > retailer_product_listing.listing_id

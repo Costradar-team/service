@@ -115,3 +115,69 @@ data-pipeline\reports\load\fis_load_report.json
 data-pipeline\reports\load\fis_load.log
 data-pipeline\reports\load\fis_load_failures.jsonl
 ```
+
+## Emart Mall Online Price Extract
+
+이마트몰 검색 HTML에 포함된 상품 카드 JSON에서 온라인 상품 가격 원천 CSV를 수집한다.
+기본 품목은 계란, 우유, 설탕, 밀가루, 버터다.
+
+```powershell
+python data-pipeline\scripts\collect\collect_emartmall.py
+```
+
+품목을 명시할 때:
+
+```powershell
+python data-pipeline\scripts\collect\collect_emartmall.py --product egg milk sugar flour butter
+```
+
+요청 간격과 429 backoff 설정을 조정할 때:
+
+```powershell
+python data-pipeline\scripts\collect\collect_emartmall.py --request-interval-seconds 2 --max-retries 3 --backoff-seconds 10
+```
+
+페이지 수와 Chrome 실행 모드 지정:
+
+```powershell
+python data-pipeline\scripts\collect\collect_emartmall.py --browser chrome --max-pages 3
+```
+
+`--max-pages` 기본값은 1이며, `0`이면 상품이 없는 마지막 페이지까지 시도한다. 품목별 결과는
+`product_key`로 구분되며, 최종 통합 CSV에서 `item_id` 기준으로 품목 간 중복을 제거한다.
+
+기본 출력 파일:
+
+```text
+data-pipeline\data\raw\emart\emart_all_{collect_date}.csv
+```
+
+## Airflow
+
+`docker-compose.yml`의 Airflow 서비스는 `data-pipeline/dags`의 DAG를 읽어 KAMIS/FIS 일 단위 ETL과
+KCA 월 단위 ETL을 실행한다. Airflow 컨테이너는 시작 시 루트 `requirements.txt`를 설치한다.
+
+루트 `.env`에 아래 값이 필요하다.
+
+```text
+KAMIS_API_KEY=
+KAMIS_API_ID=
+KAKAO_REST_API_KEY=
+ODCLOUD_SERVICE_KEY=
+```
+
+`KAMIS_ID`는 `KAMIS_API_ID`의 별칭으로, `KCA_API_KEY`는 `ODCLOUD_SERVICE_KEY`의 별칭으로 사용할 수 있다.
+
+실행:
+
+```powershell
+docker compose up -d mysql airflow
+```
+
+웹 UI:
+
+```text
+http://localhost:8081
+username: airflow
+password: airflow
+```

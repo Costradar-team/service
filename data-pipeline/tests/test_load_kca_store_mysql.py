@@ -4,6 +4,9 @@ import importlib.util
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+from sqlalchemy import BigInteger, Column, Computed, Integer, MetaData, String, Table, UniqueConstraint, create_engine, func, insert, select
 
 
 LOAD_DIR = Path(__file__).resolve().parents[1] / "scripts" / "load"
@@ -118,6 +121,95 @@ class StoreMasterRowTests(unittest.TestCase):
         self.assertEqual(payload["store_type"], "BRANCH")
         self.assertEqual(payload["match_status"], "matched")
         self.assertEqual(payload["region_id"], 99)
+
+
+class StoreLoadConventionTests(unittest.TestCase):
+    def test_declared_region_and_store_unique_grains(self) -> None:
+        region_constraints = {
+            constraint.name: [column.name for column in constraint.columns]
+            for constraint in load_kca_store.region.constraints
+            if isinstance(constraint, UniqueConstraint)
+        }
+        store_constraints = {
+            constraint.name: [column.name for column in constraint.columns]
+            for constraint in load_kca_store.store.constraints
+            if isinstance(constraint, UniqueConstraint)
+        }
+        self.assertEqual(region_constraints["uq_region_parent_name"], ["parent_region_id", "name"])
+        self.assertEqual(region_constraints["uq_region_root_name"], ["root_region_name"])
+        self.assertEqual(
+            store_constraints["uq_store_retailer_source_store_name"],
+            ["retailer_id", "source_store_name"],
+        )
+
+    def test_root_region_and_store_grains_are_idempotent(self) -> None:
+        metadata = MetaData()
+        test_region = Table(
+            "region", metadata,
+            Column("region_id", Integer, primary_key=True),
+            Column("parent_region_id", Integer),
+            Column("name", String(50), nullable=False),
+            Column("root_region_name", String(100), Computed("CASE WHEN parent_region_id IS NULL THEN name ELSE NULL END")),
+            UniqueConstraint("parent_region_id", "name"),
+            UniqueConstraint("root_region_name"),
+        )
+        test_store = Table(
+            "store", metadata,
+            Column("store_id", Integer, primary_key=True),
+            Column("retailer_id", BigInteger, nullable=False),
+            Column("source_store_name", String(255), nullable=False),
+            UniqueConstraint("retailer_id", "source_store_name"),
+        )
+        engine = create_engine("sqlite://")
+        metadata.create_all(engine)
+        with engine.begin() as conn:
+            for _ in range(2):
+                conn.execute(insert(test_region).prefix_with("OR IGNORE"), {"parent_region_id": None, "name": "서울"})
+                conn.execute(insert(test_store).prefix_with("OR IGNORE"), {"retailer_id": 1, "source_store_name": "롯데마트 서울점"})
+            self.assertEqual(conn.scalar(select(func.count()).select_from(test_region)), 1)
+            self.assertEqual(conn.scalar(select(func.count()).select_from(test_store)), 1)
+
+    def test_store_failure_preserves_committed_retailer_and_region(self) -> None:
+        state: list[str] = []
+        transaction_count = 0
+
+        class Transaction:
+            def __enter__(self):
+                return object()
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+        class Engine:
+            def begin(self):
+                nonlocal transaction_count
+                transaction_count += 1
+                return Transaction()
+
+        with (
+            patch.object(load_kca_store, "load_retailers", side_effect=lambda *args: state.append("retailer") or {"R": 1}),
+            patch.object(load_kca_store, "load_regions", side_effect=lambda *args: state.append("region") or {("서울",): 1}),
+            patch.object(load_kca_store, "upsert_stores", side_effect=RuntimeError("store failed")),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "store failed"):
+                load_kca_store.load_store_master_staged(
+                    Engine(), load_kca_store.LoadReport(), [], 1000, Path("failures.jsonl")
+                )
+        self.assertEqual(state, ["retailer", "region"])
+        self.assertEqual(transaction_count, 3)
+
+    def test_processed_input_missing_required_value_fails_load(self) -> None:
+        import csv
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "stores.csv"
+            with path.open("w", encoding="utf-8-sig", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=load_kca_store.REQUIRED_COLUMNS)
+                writer.writeheader()
+                writer.writerow({column: "" for column in load_kca_store.REQUIRED_COLUMNS})
+            with self.assertRaises(load_kca_store.MissingRequiredValueError):
+                load_kca_store.read_store_master_rows(path, Path(temp) / "failures.jsonl")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,23 @@
+{
+  "retailer": {
+    "input": 11,
+    "inserted": 0,
+    "skipped": 11,
+    "failed": 0,
+    "failed_batches": 0
+  },
+  "region": {
+    "input": 491,
+    "inserted": 0,
+    "skipped": 491,
+    "failed": 0,
+    "failed_batches": 0
+  },
+  "store": {
+    "input": 466,
+    "inserted": 0,
+    "skipped": 466,
+    "failed": 0,
+    "failed_batches": 0
+  }
+}
